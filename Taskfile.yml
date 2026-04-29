@@ -42,9 +42,20 @@ tasks:
       - go build ./...
 
   build:example:
-    desc: Build the example binary
+    desc: Build the basic example binary
     cmds:
       - go build -o ./bin/example ./examples/basic/
+
+  build:cli:
+    desc: Build the CLI binary
+    cmds:
+      - go build -o ./bin/scriptling-llm ./examples/cli/
+
+  run:cli:
+    desc: "Run a script through the CLI (usage: task run:cli -- script.py)"
+    cmds:
+      - go run ./examples/cli/ {{.CLI_ARGS}}
+
 
   tidy:
     desc: Tidy go.mod
