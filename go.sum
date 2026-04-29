@@ -1,0 +1,6 @@
+github.com/google/uuid v1.6.0 h1:NIvaJDMOsjHA8n1jAhLSgzrAzy1Hgr+hNrb57e+94F0=
+github.com/google/uuid v1.6.0/go.mod h1:TIyPZe4MgqvfeYDBFedMoGGpEw/LqOeaOT+nhxU+yHo=
+github.com/paularlott/scriptling v0.6.1 h1:DvG/M73Z9CK0NdodaUc/UUpQYbikQ+dFFYmUXcAWvU0=
+github.com/paularlott/scriptling v0.6.1/go.mod h1:qU4HppheAHox3a2zhS63Moo0C4mlqf43Kp0R67b4C3M=
+golang.org/x/text v0.36.0 h1:JfKh3XmcRPqZPKevfXVpI1wXPTqbkE5f7JA92a55Yxg=
+golang.org/x/text v0.36.0/go.mod h1:NIdBknypM8iqVmPiuco0Dh6P5Jcdk8lJL0CUebqK164=
