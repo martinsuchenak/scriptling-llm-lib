@@ -27,7 +27,7 @@
 //   - Activation functions: sigmoid, relu, gelu, silu
 //   - Vector operations: vec_add, vec_sub, vec_mul, vec_scale, vec_apply
 //   - LLM primitives: rms_norm, rope, silu_gate, attention, linear, linear_row,
-//     top_k, dequantize_q8
+//     linear_q8, linear_row_q8, top_k, dequantize_q8, dequantize_q8_0
 //   - Matrix utilities: concat_rows, slice_rows, flatten
 //
 // # Data Conventions
@@ -49,7 +49,7 @@ const LibraryName = "llm"
 // functions. Register it with a Scriptling interpreter via
 // [scriptling.Scriptling.RegisterLibrary].
 //
-// The library exposes 24 functions and one constant (VERSION).
+// The library exposes 27 functions and one constant (VERSION).
 var Library = object.NewLibrary(LibraryName,
 	map[string]*object.Builtin{
 		// --- Inference helpers ---
@@ -375,6 +375,45 @@ Example:
   w = [[1.0, 0.0], [0.0, 1.0]]
   linear_row(x, w)  # [3.0, 4.0]`,
 		},
+		"linear_q8": {
+			Fn: fnLinearQ8,
+			HelpText: `linear_q8(x, raw, groups_per_row) - Quantized Q8_0 matmul (no dequantize)
+
+Computes x @ weight.T where weight is stored as raw Q8_0 blocks.
+Avoids the overhead of dequantizing weights to float first.
+Each Q8_0 block: 2-byte f16 scale + 32 int8 values = 34 bytes.
+Weight shape: (out_features, in_features) where in_features = groups_per_row * 32.
+
+Parameters:
+  x              - input matrix (seq_len, in_features)
+  raw            - string of raw Q8_0 block bytes (out_features * groups_per_row * 34 bytes)
+  groups_per_row - number of Q8_0 groups per weight row (in_features / 32)
+
+Returns:
+  Matrix (seq_len, out_features).
+
+Example:
+  # weight [100, 576] => groups_per_row = 18, raw = 100 * 18 * 34 bytes
+  linear_q8(x, raw, 18)`,
+		},
+		"linear_row_q8": {
+			Fn: fnLinearRowQ8,
+			HelpText: `linear_row_q8(x, raw, groups_per_row) - Last-row-only quantized Q8_0 matmul
+
+Same as linear_q8 but computes only the last row of x, returning a vector.
+Used for the output projection during generation.
+
+Parameters:
+  x              - input matrix (seq_len, in_features)
+  raw            - string of raw Q8_0 block bytes
+  groups_per_row - number of Q8_0 groups per weight row (in_features / 32)
+
+Returns:
+  Vector (out_features,).
+
+Example:
+  linear_row_q8(x, raw, 18)`,
+		},
 		"top_k": {
 			Fn: fnTopK,
 			HelpText: `top_k(logits, k) - Find the k highest-scoring elements using partial sort
@@ -411,6 +450,25 @@ Returns:
 Example:
   dequantize_q8([10, -5, 20, 15], [0.1, 0.2], 2)
   # [1.0, -0.5, 4.0, 3.0]`,
+		},
+		"dequantize_q8_0": {
+			Fn: fnDequantizeQ8_0,
+			HelpText: `dequantize_q8_0(raw, n_groups) - Native GGUF Q8_0 block dequantization
+
+Takes raw Q8_0 block data (as returned by fs.read_bytes) and the number of groups.
+Each Q8_0 block is 34 bytes: 2-byte f16 scale + 32 int8 values.
+Returns n_groups * 32 dequantized floats. No Python-side loop needed.
+
+Parameters:
+  raw      - string of raw Q8_0 block bytes (from fs.read_bytes)
+  n_groups - number of Q8_0 groups (each group = 34 bytes = 32 elements)
+
+Returns:
+  List of dequantized floats (length = n_groups * 32).
+
+Example:
+  raw = fs.read_bytes("model.gguf", offset, n_groups * 34)
+  dequantize_q8_0(raw, n_groups)`,
 		},
 
 		// --- Matrix utilities ---

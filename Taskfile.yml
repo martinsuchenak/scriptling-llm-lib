@@ -80,3 +80,16 @@ tasks:
     desc: Remove build artifacts
     cmds:
       - rm -rf bin/ coverage.txt coverage.html
+  
+  release:
+    desc: 'Create a version tag and push it (usage: task release -- v0.1.0)'
+    deps: [fmt, vet, lint, ci, build]
+    preconditions:
+      - sh: 'test -n "{{.CLI_ARGS}}"'
+        msg: 'version tag required (e.g. task release -- v0.1.0)'
+      - sh: 'git diff --quiet'
+        msg: 'working tree has uncommitted changes'
+    cmds:      
+      - git tag {{.CLI_ARGS}}
+      - git push origin {{.CLI_ARGS}}
+      - echo "Tagged and pushed {{.CLI_ARGS}}"
