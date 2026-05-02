@@ -344,9 +344,19 @@ Example:
 			Fn: fnFusedFFN,
 			HelpText: `fused_ffn(x, w_gate, w_up, w_down) - Fused gate+up+silu+down`,
 		},
+		"fused_block": {
+			Fn: fnFusedBlock,
+			HelpText: `fused_block(x, attn_norm_w, w_q, w_k, w_v, w_o, ffn_norm_w, w_gate, w_up, w_down, n_heads, n_kv_heads, d_k, start_pos=0, causal=True) - Fully fused transformer block
+
+Returns: [result, new_k_heads, new_v_heads]`,
+		},
 		"fused_rope_batch": {
 			Fn: fnFusedRopeBatch,
 			HelpText: `fused_rope_batch(heads, start_pos, freq_base=, rope_dim=) - Batch RoPE`,
+		},
+		"fused_attention": {
+			Fn: fnFusedAttention,
+			HelpText: `fused_attention(q_heads, k_heads, v_heads, causal=True) - Multi-head attention in one call`,
 		},
 		"sample": {
 			Fn: fnSample,
@@ -457,6 +467,22 @@ Parameters:
 
 Returns:
   String of raw Q8_0 block bytes.`,
+		},
+		"generate": {
+			Fn: fnGenerate,
+			HelpText: `generate(model_path, prompt, max_tokens=100, strategy="greedy") - Generate text from a GGUF model
+
+Parameters:
+  model_path - path to .gguf model file
+  prompt     - input text
+  max_tokens - maximum tokens to generate (default 100)
+  strategy   - sampling strategy: greedy, temperature, top_k, top_p
+
+Keyword args: temperature, top_k, top_p, repeat_penalty, repeat_last_n,
+              system_prompt, template, stats
+
+Returns:
+  Generated text string.`,
 		},
 	},
 	map[string]object.Object{

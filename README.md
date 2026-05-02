@@ -1,6 +1,6 @@
 # Scriptling LLM Library
 
-Native Go library providing 24 LLM inference primitives for [Scriptling](https://github.com/paularlott/scriptling). All functions use the Native API for zero-reflection overhead on transformer inference hot paths.
+Native Go library providing 50+ LLM inference functions and end-to-end text generation for [Scriptling](https://github.com/paularlott/scriptling). All functions use the Native API for zero-reflection overhead on transformer inference hot paths.
 
 ## Installation
 
@@ -10,24 +10,29 @@ go get github.com/martinsuchenak/scriptling-llm-lib
 
 ## Quick Start
 
-```go
-package main
+### End-to-end text generation from a GGUF model:
 
-import (
-    "github.com/martinsuchenak/scriptling-llm-lib"
-    "github.com/paularlott/scriptling"
-)
+```python
+import llm
+result = llm.generate("models/model.gguf", "Once upon a time", 50, "greedy")
+print(result)
+```
 
-func main() {
-    p := scriptling.New()
-    p.RegisterLibrary(scriptlingllmlib.Library)
+### Or use individual primitives:
 
-    p.Eval(`
+```python
 import llm
 result = llm.argmax([0.1, 0.9, 0.3])
 print(result)  # 1
-`)
-}
+```
+
+## CLI Binary
+
+Build the Scriptling runtime with LLM support:
+
+```bash
+go build -o sllm ./cmd/sllm
+./sllm examples/generate/run.py models/model.gguf "Once upon a time" 50 greedy stats
 ```
 
 ## Data Conventions
@@ -395,11 +400,11 @@ llm.flatten([[1, 2], [3, 4]])  # [1.0, 2.0, 3.0, 4.0]
 
 | Name | Type | Value |
 |---|---|---|
-| `VERSION` | string | `"1.0.0"` |
+| `VERSION` | string | `"1.1.0"` |
 
 ```python
 import llm
-print(llm.VERSION)  # "1.0.0"
+print(llm.VERSION)  # "1.1.0"
 ```
 
 ---
@@ -437,7 +442,12 @@ token = llm.argmax(logits)
 ## Running Examples
 
 ```bash
+# Go example exercising all functions
 go run examples/basic/main.go
+
+# Build CLI and run generation
+go build -o sllm ./cmd/sllm
+./sllm examples/generate/run.py models/model.gguf "Once upon a time" 50 greedy stats
 ```
 
 ## Running Tests
@@ -450,7 +460,18 @@ go test -v -race ./...
 
 ### Why Native API?
 
-All 24 functions use Scriptling's Native API (`func(ctx, kwargs, args...) object.Object`) instead of the Builder API. This eliminates reflection-based type conversion overhead at registration time and avoids any per-call marshaling cost. For hot-path functions like `attention` (called ~270 times per token) and `rope` (~540 times per token), this matters.
+All 50+ functions use Scriptling's Native API (`func(ctx, kwargs, args...) object.Object`) instead of the Builder API. This eliminates reflection-based type conversion overhead at registration time and avoids any per-call marshaling cost. For hot-path functions like `attention` (called ~270 times per token) and `rope` (~540 times per token), this matters.
+
+### End-to-end Generation
+
+`llm.generate()` loads a GGUF model file and runs complete transformer inference entirely in Go:
+- GGUF parsing with support for F32, F16, Q4_0, Q5_0, Q8_0, Q4_K, Q6_K tensor types
+- BPE tokenization (sentencepiece + GPT-2 byte-fallback)
+- Full transformer forward pass with KV caching and GQA support
+- Sampling with greedy, temperature, top_k, top_p strategies and repeat penalty
+- Model caching — loaded models are cached by path
+
+This eliminates all Python→Go call overhead per token, as the entire generation loop runs natively.
 
 ### Why not use Scriptling's built-in `math` library?
 
@@ -484,12 +505,31 @@ token = llm.argmax(probs)                     # from this library
 ├── llm.go              # Package docs, Library registration, HelpText
 ├── helpers.go          # Type conversion helpers (Scriptling objects <-> Go slices)
 ├── math_ops.go         # argmax, argmin, topk, clip
-├── activations.go      # sigmoid, relu, gelu, silu (+ Go-native functions)
+├── activations.go      # sigmoid, relu, gelu, silu
 ├── vector_ops.go       # vec_add, vec_sub, vec_mul, vec_scale, vec_apply
-├── llm_primitives.go   # rms_norm, rope, silu_gate, attention, linear, linear_row, top_k, dequantize_q8
-├── matrix_ops.go       # concat_rows, slice_rows, flatten
-├── llm_test.go         # 26 unit tests with error-case coverage
-├── examples/basic/
-│   └── main.go         # End-to-end example exercising all functions
+├── llm_primitives.go   # rms_norm, rope, silu_gate, attention, linear, linear_row
+├── matrix_ops.go       # concat_rows, slice_rows, flatten, reshape, zeros, arange
+├── sampling.go         # sample (greedy, temperature, top_k, top_p), repeat penalty
+├── heads.go            # split_heads, merge_heads, repeat_kv
+├── quantize.go         # quantize_q8, quantize_q8_rows
+├── fused_ops.go        # fused_qkv, fused_ffn, fused_rope_batch, fused_attention
+├── fused_block.go      # fused_block (full transformer block in one call)
+├── fused.go            # q4kDotBlockFast, output_logits
+├── parallel.go         # parallelFor (goroutine work-stealing)
+├── q8_fast.go          # Q8_0 quantized dot-product (unsafe SIMD)
+├── q5_fast.go          # Q5_0 quantized dot-product
+├── q4k.go              # Q4_K quantized matmul
+├── q6k.go              # Q6_K quantized matmul
+├── gguf.go             # GGUF binary parser (metadata, tensors, dequantization)
+├── tokenizer.go        # BPE tokenizer (sentencepiece + GPT-2 byte-fallback)
+├── chat_template.go    # Chat template engine (ChatML, Llama, Mistral)
+├── model.go            # Transformer model, forward pass, KV cache, generate()
+├── cmd/sllm/           # CLI binary (Scriptling runtime with LLM lib)
+├── examples/
+│   ├── basic/          # Go example exercising all functions
+│   ├── cli/            # Go CLI example + demo.py
+│   └── generate/       # run.py — end-to-end generation example
+├── docs/               # Architecture and API documentation
+├── llm_test.go         # Unit tests
 └── README.md
 ```

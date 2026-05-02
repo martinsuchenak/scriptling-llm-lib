@@ -96,6 +96,42 @@ func q4DotGroupX(raw []byte, rawOff int, xData []float64, xBase int) float64 {
 	return s * sum
 }
 
+func q4_1DotGroupX(raw []byte, rawOff int, xData []float64, xBase int) float64 {
+	d := readF16(raw, rawOff)
+	m := readF16(raw, rawOff+2)
+	qw := unsafe.Slice((*uint64)(unsafe.Pointer(&raw[rawOff+4])), 2)
+	var qSum, xSum float64
+	for w := 0; w < 2; w++ {
+		chunk := qw[w]
+		b0 := float64(chunk & 0x0F)
+		b1 := float64((chunk >> 4) & 0x0F)
+		b2 := float64((chunk >> 8) & 0x0F)
+		b3 := float64((chunk >> 12) & 0x0F)
+		b4 := float64((chunk >> 16) & 0x0F)
+		b5 := float64((chunk >> 20) & 0x0F)
+		b6 := float64((chunk >> 24) & 0x0F)
+		b7 := float64((chunk >> 28) & 0x0F)
+		b8 := float64((chunk >> 32) & 0x0F)
+		b9 := float64((chunk >> 36) & 0x0F)
+		b10 := float64((chunk >> 40) & 0x0F)
+		b11 := float64((chunk >> 44) & 0x0F)
+		b12 := float64((chunk >> 48) & 0x0F)
+		b13 := float64((chunk >> 52) & 0x0F)
+		b14 := float64((chunk >> 56) & 0x0F)
+		b15 := float64((chunk >> 60) & 0x0F)
+		i := xBase + w*16
+		qSum += b0*xData[i] + b1*xData[i+1] + b2*xData[i+2] + b3*xData[i+3] +
+			b4*xData[i+4] + b5*xData[i+5] + b6*xData[i+6] + b7*xData[i+7] +
+			b8*xData[i+8] + b9*xData[i+9] + b10*xData[i+10] + b11*xData[i+11] +
+			b12*xData[i+12] + b13*xData[i+13] + b14*xData[i+14] + b15*xData[i+15]
+		xSum += xData[i] + xData[i+1] + xData[i+2] + xData[i+3] +
+			xData[i+4] + xData[i+5] + xData[i+6] + xData[i+7] +
+			xData[i+8] + xData[i+9] + xData[i+10] + xData[i+11] +
+			xData[i+12] + xData[i+13] + xData[i+14] + xData[i+15]
+	}
+	return d*qSum + m*xSum
+}
+
 func q4DotGroup(raw []byte, rawOff int, x []float64, xOff int) float64 {
 	s := readF16(raw, rawOff)
 	qw := unsafe.Slice((*uint64)(unsafe.Pointer(&raw[rawOff+2])), 2)

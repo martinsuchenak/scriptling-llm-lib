@@ -4,9 +4,12 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"github.com/martinsuchenak/scriptling-llm-lib"
 	"github.com/paularlott/scriptling"
+	"github.com/paularlott/scriptling/extlibs"
+	"github.com/paularlott/scriptling/libloader"
 	"github.com/paularlott/scriptling/object"
 	"github.com/paularlott/scriptling/stdlib"
 )
@@ -23,16 +26,15 @@ func main() {
 	flag.BoolVar(&showHelp, "help", false, "Show usage information")
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage: %s [options] <script.py> [args...]\n\n", os.Args[0])
-		fmt.Fprintf(os.Stderr, "Scriptling with LLM inference primitives.\n\n")
+		fmt.Fprintf(os.Stderr, "Scriptling runtime with LLM inference support.\n\n")
 		fmt.Fprintf(os.Stderr, "Options:\n")
 		flag.PrintDefaults()
-		fmt.Fprintf(os.Stderr, "\nAvailable functions: import llm\n")
-		fmt.Fprintf(os.Stderr, "  argmax, argmin, topk, clip,\n")
-		fmt.Fprintf(os.Stderr, "  sigmoid, relu, gelu, silu,\n")
-		fmt.Fprintf(os.Stderr, "  vec_add, vec_sub, vec_mul, vec_scale, vec_apply,\n")
-		fmt.Fprintf(os.Stderr, "  rms_norm, rope, silu_gate, attention, linear, linear_row,\n")
-		fmt.Fprintf(os.Stderr, "  top_k, dequantize_q8,\n")
-		fmt.Fprintf(os.Stderr, "  concat_rows, slice_rows, flatten\n")
+		fmt.Fprintf(os.Stderr, "\nAvailable libraries:\n")
+		fmt.Fprintf(os.Stderr, "  llm   — LLM inference primitives and generate()\n")
+		fmt.Fprintf(os.Stderr, "  math  — standard math operations\n")
+		fmt.Fprintf(os.Stderr, "  os    — file system operations\n")
+		fmt.Fprintf(os.Stderr, "  fs    — binary file I/O\n")
+		fmt.Fprintf(os.Stderr, "  sys   — system/argv access\n")
 	}
 	flag.Parse()
 
@@ -45,6 +47,11 @@ func main() {
 	p.EnableOutputCapture()
 	stdlib.RegisterAll(p)
 	p.RegisterLibrary(scriptlingllmlib.Library)
+
+	wd, _ := os.Getwd()
+	extlibs.RegisterOSLibrary(p, []string{wd})
+	extlibs.RegisterFSLibrary(p, []string{wd})
+	extlibs.RegisterRuntimeLibrary(p)
 
 	if eval != "" {
 		result, err := p.Eval(eval)
@@ -69,10 +76,15 @@ func main() {
 	}
 
 	filename := args[0]
+	scriptArgs := append([]string{filename}, args[1:]...)
+	extlibs.RegisterSysLibrary(p, scriptArgs, nil)
 	if _, err := os.Stat(filename); os.IsNotExist(err) {
 		fmt.Fprintf(os.Stderr, "Error: file not found: %s\n", filename)
 		os.Exit(2)
 	}
+
+	scriptDir, _ := filepath.Abs(filepath.Dir(filename))
+	p.SetLibraryLoader(libloader.NewFilesystem(scriptDir))
 
 	if lint {
 		_, err := p.EvalFile(filename)
