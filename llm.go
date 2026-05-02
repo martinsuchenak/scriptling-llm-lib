@@ -336,6 +336,18 @@ Example:
 			Fn: fnOutputLogits,
 			HelpText: `output_logits(x, norm_weight, output_weight) - Fused RMS norm + output projection`,
 		},
+		"fused_qkv": {
+			Fn: fnFusedQKV,
+			HelpText: `fused_qkv(x, w_q, w_k, w_v) - Parallel QKV projection`,
+		},
+		"fused_ffn": {
+			Fn: fnFusedFFN,
+			HelpText: `fused_ffn(x, w_gate, w_up, w_down) - Fused gate+up+silu+down`,
+		},
+		"fused_rope_batch": {
+			Fn: fnFusedRopeBatch,
+			HelpText: `fused_rope_batch(heads, start_pos, freq_base=, rope_dim=) - Batch RoPE`,
+		},
 		"sample": {
 			Fn: fnSample,
 			HelpText: `sample(logits, strategy, temperature=1.0, top_k=50) - Native sampling

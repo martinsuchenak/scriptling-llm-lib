@@ -8,7 +8,7 @@ import (
 var nWorkers = runtime.NumCPU()
 
 func parallelFor(n int, fn func(start, end int)) {
-	if n <= 64 || nWorkers <= 1 {
+	if n <= 256 || nWorkers <= 1 {
 		fn(0, n)
 		return
 	}
