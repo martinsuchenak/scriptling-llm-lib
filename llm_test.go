@@ -37,6 +37,11 @@ func evalList(t *testing.T, obj object.Object) []object.Object {
 
 func evalFloatList(t *testing.T, obj object.Object) []float64 {
 	t.Helper()
+	if fa, ok := obj.(*object.FloatArray); ok && !fa.Is2D() {
+		result := make([]float64, len(fa.Data))
+		copy(result, fa.Data)
+		return result
+	}
 	elems := evalList(t, obj)
 	vals := make([]float64, len(elems))
 	for i, e := range elems {
@@ -47,6 +52,17 @@ func evalFloatList(t *testing.T, obj object.Object) []float64 {
 
 func evalFloatMatrix(t *testing.T, obj object.Object) [][]float64 {
 	t.Helper()
+	if fa, ok := obj.(*object.FloatArray); ok && fa.Is2D() {
+		rows := fa.Rows()
+		result := make([][]float64, rows)
+		for i := 0; i < rows; i++ {
+			row := fa.Row(i)
+			rowCopy := make([]float64, len(row))
+			copy(rowCopy, row)
+			result[i] = rowCopy
+		}
+		return result
+	}
 	rows := evalList(t, obj)
 	mat := make([][]float64, len(rows))
 	for i, r := range rows {
@@ -60,6 +76,23 @@ func assertError(t *testing.T, obj object.Object, msg string) {
 	if _, ok := obj.(*object.Error); !ok {
 		t.Fatalf("expected error containing %q, got %s", msg, obj.Inspect())
 	}
+}
+
+func assertEmptyListOrFloatArray(t *testing.T, obj object.Object) {
+	t.Helper()
+	if fa, ok := obj.(*object.FloatArray); ok {
+		if len(fa.Data) != 0 {
+			t.Fatalf("expected empty, got %s", obj.Inspect())
+		}
+		return
+	}
+	if l, ok := obj.(*object.List); ok {
+		if len(l.Elements) != 0 {
+			t.Fatalf("expected empty, got %s", obj.Inspect())
+		}
+		return
+	}
+	t.Fatalf("expected empty list or FloatArray, got %s", obj.Type().String())
 }
 
 func floatList(vals ...float64) object.Object {
@@ -307,7 +340,7 @@ func TestRmsNorm(t *testing.T) {
 	ss := (0.25 + 0.09 + 0.64) / 3.0
 	inv := 1.0 / math.Sqrt(ss+1e-5)
 	for j, v := range mat[0] {
-		expected := row[j] * inv * w.(*object.List).Elements[j].(*object.Float).Value
+		expected := row[j] * inv * 1.0
 		if math.Abs(v-expected) > 1e-10 {
 			t.Errorf("rms_norm[0][%d] = %f, want %f", j, v, expected)
 		}
@@ -691,7 +724,7 @@ func TestLinearQ8(t *testing.T) {
 
 func TestLinearQ8Errors(t *testing.T) {
 	assertError(t, fnLinearQ8(ctx, noopKwargs), "3 arguments")
-	assertError(t, fnLinearQ8(ctx, noopKwargs, &object.String{Value: "x"}, &object.String{Value: "x"}, object.NewInteger(1)), "LIST")
+	assertError(t, fnLinearQ8(ctx, noopKwargs, &object.String{Value: "x"}, &object.String{Value: "x"}, object.NewInteger(1)), "LIST or FLOAT_ARRAY")
 	assertError(t, fnLinearQ8(ctx, noopKwargs, floatMatrix(make([]float64, 32)), floatList(1.0), object.NewInteger(1)), "STRING")
 	assertError(t, fnLinearQ8(ctx, noopKwargs, floatMatrix(make([]float64, 32)), &object.String{Value: "x"}, &object.String{Value: "x"}), "INTEGER")
 	assertError(t, fnLinearQ8(ctx, noopKwargs, floatMatrix(make([]float64, 32)), &object.String{Value: "x"}, object.NewInteger(0)), "positive")
@@ -825,10 +858,7 @@ func TestRopeErrors(t *testing.T) {
 	assertError(t, fnRope(ctx, noopKwargs, &object.String{Value: "x"}), "LIST")
 	assertError(t, fnRope(ctx, noopKwargs, floatMatrix([]float64{1.0, 0.0}), &object.String{Value: "x"}), "INTEGER")
 	result := fnRope(ctx, noopKwargs, &object.List{Elements: []object.Object{}})
-	l, ok := result.(*object.List)
-	if !ok || len(l.Elements) != 0 {
-		t.Errorf("rope empty = %s, want empty list", result.Inspect())
-	}
+	assertEmptyListOrFloatArray(t, result)
 }
 
 func TestSiluGateErrors(t *testing.T) {
@@ -839,10 +869,7 @@ func TestSiluGateErrors(t *testing.T) {
 	assertError(t, fnSiluGate(ctx, noopKwargs, floatMatrix([]float64{1.0, 2.0}), floatMatrix([]float64{1.0})), "columns")
 	empty := &object.List{Elements: []object.Object{}}
 	result := fnSiluGate(ctx, noopKwargs, empty, empty)
-	l, ok := result.(*object.List)
-	if !ok || len(l.Elements) != 0 {
-		t.Errorf("silu_gate empty = %s, want empty list", result.Inspect())
-	}
+	assertEmptyListOrFloatArray(t, result)
 }
 
 func TestAttentionErrors(t *testing.T) {
@@ -882,10 +909,7 @@ func TestConcatRowsErrors(t *testing.T) {
 	assertError(t, fnConcatRows(ctx, noopKwargs, &object.String{Value: "x"}, floatMatrix([]float64{1.0})), "LIST")
 	assertError(t, fnConcatRows(ctx, noopKwargs, floatMatrix([]float64{1.0}), &object.String{Value: "x"}), "LIST")
 	result := fnConcatRows(ctx, noopKwargs, floatMatrix(), floatMatrix())
-	l, ok := result.(*object.List)
-	if !ok || len(l.Elements) != 0 {
-		t.Errorf("concat_rows empty = %s, want empty list", result.Inspect())
-	}
+	assertEmptyListOrFloatArray(t, result)
 }
 
 func TestSliceRowsMore(t *testing.T) {
@@ -895,10 +919,7 @@ func TestSliceRowsMore(t *testing.T) {
 	assertError(t, fnSliceRows(ctx, noopKwargs, floatMatrix([]float64{1.0}), object.NewInteger(0), &object.String{Value: "x"}), "INTEGER")
 	m := floatMatrix([]float64{1.0}, []float64{2.0}, []float64{3.0})
 	result := fnSliceRows(ctx, noopKwargs, m, object.NewInteger(2), object.NewInteger(2))
-	l, ok := result.(*object.List)
-	if !ok || len(l.Elements) != 0 {
-		t.Errorf("slice_rows start==end = %s, want empty list", result.Inspect())
-	}
+	assertEmptyListOrFloatArray(t, result)
 	result = fnSliceRows(ctx, noopKwargs, m, object.NewInteger(-1), object.NewInteger(1))
 	mat := evalFloatMatrix(t, result)
 	if len(mat) != 1 || mat[0][0] != 1.0 {
@@ -921,10 +942,7 @@ func TestDequantizeQ8More(t *testing.T) {
 	strList := &object.List{Elements: []object.Object{&object.String{Value: "x"}}}
 	assertError(t, fnDequantizeQ8(ctx, noopKwargs, strList, floatList(0.1), object.NewInteger(1)), "INTEGER")
 	result := fnDequantizeQ8(ctx, noopKwargs, intList(), floatList(0.1), object.NewInteger(2))
-	l, ok := result.(*object.List)
-	if !ok || len(l.Elements) != 0 {
-		t.Errorf("dequantize_q8 empty = %s, want empty list", result.Inspect())
-	}
+	assertEmptyListOrFloatArray(t, result)
 }
 
 func TestToFloatListErrors(t *testing.T) {
@@ -968,7 +986,7 @@ func TestToFloatMatrixErrors(t *testing.T) {
 
 func TestLinearRowQ8Errors(t *testing.T) {
 	assertError(t, fnLinearRowQ8(ctx, noopKwargs), "3 arguments")
-	assertError(t, fnLinearRowQ8(ctx, noopKwargs, &object.String{Value: "x"}, &object.String{Value: "x"}, object.NewInteger(1)), "LIST")
+	assertError(t, fnLinearRowQ8(ctx, noopKwargs, &object.String{Value: "x"}, &object.String{Value: "x"}, object.NewInteger(1)), "LIST or FLOAT_ARRAY")
 	assertError(t, fnLinearRowQ8(ctx, noopKwargs, floatMatrix(make([]float64, 32)), floatList(1.0), object.NewInteger(1)), "STRING")
 	assertError(t, fnLinearRowQ8(ctx, noopKwargs, floatMatrix(make([]float64, 32)), &object.String{Value: "x"}, &object.String{Value: "x"}), "INTEGER")
 	assertError(t, fnLinearRowQ8(ctx, noopKwargs, floatMatrix(make([]float64, 32)), &object.String{Value: "x"}, object.NewInteger(0)), "positive")
@@ -995,8 +1013,8 @@ func TestLibraryRegistration(t *testing.T) {
 
 	funcs := Library.Functions()
 	funcCount := len(funcs)
-	if funcCount != 27 {
-		t.Errorf("Library has %d functions, want 27", funcCount)
+	if funcCount != 39 {
+		t.Errorf("Library has %d functions, want 39", funcCount)
 	}
 
 	required := []string{
@@ -1004,9 +1022,11 @@ func TestLibraryRegistration(t *testing.T) {
 		"sigmoid", "relu", "gelu", "silu",
 		"vec_add", "vec_sub", "vec_mul", "vec_scale", "vec_apply",
 		"rms_norm", "rope", "silu_gate", "attention", "linear", "linear_row",
-		"linear_q8", "linear_row_q8",
-		"top_k", "dequantize_q8", "dequantize_q8_0",
-		"concat_rows", "slice_rows", "flatten",
+		"linear_q8", "linear_row_q8", "linear_q4", "linear_row_q4",
+		"top_k", "dequantize_q8", "dequantize_q8_0", "dequantize_q4_0",
+		"sample", "split_heads", "merge_heads", "repeat_kv",
+		"concat_rows", "slice_rows", "flatten", "reshape", "zeros", "arange",
+		"quantize_q8", "quantize_q8_rows",
 	}
 	for _, name := range required {
 		if _, ok := funcs[name]; !ok {
@@ -1018,8 +1038,8 @@ func TestLibraryRegistration(t *testing.T) {
 	if v, ok := consts["VERSION"]; !ok {
 		t.Error("missing VERSION constant")
 	} else {
-		if v.(*object.String).Value != "1.0.0" {
-			t.Errorf("VERSION = %s, want 1.0.0", v.(*object.String).Value)
+		if v.(*object.String).Value != "1.1.0" {
+			t.Errorf("VERSION = %s, want 1.1.0", v.(*object.String).Value)
 		}
 	}
 }

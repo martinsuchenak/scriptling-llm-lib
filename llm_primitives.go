@@ -10,16 +10,9 @@ import (
 	"github.com/paularlott/scriptling/object"
 )
 
-// fnRmsNorm implements llm.rms_norm: RMS normalization.
-// For each row: divide by root-mean-square, then multiply element-wise by weight.
-// Used by LLaMA, Mistral, Phi, Qwen. Called twice per transformer layer.
 func fnRmsNorm(ctx context.Context, kwargs object.Kwargs, args ...object.Object) object.Object {
 	if err := errors.RangeArgs(args, 2, 3); err != nil {
 		return err
-	}
-	x, errObj := toFloatMatrix(args[0], "rms_norm", "x")
-	if errObj != nil {
-		return errObj
 	}
 	w, errObj := toFloatList(args[1], "rms_norm", "weight")
 	if errObj != nil {
@@ -34,8 +27,40 @@ func fnRmsNorm(ctx context.Context, kwargs object.Kwargs, args ...object.Object)
 		eps = e
 	}
 
-	result := make([][]float64, len(x))
-	for i, row := range x {
+	if xData, xRows, xCols, ok := object.GetFloatMatrix(args[0]); ok {
+		if xRows == 0 {
+			return object.NewFloatArray2D(nil, 0, 0)
+		}
+		if xCols != len(w) {
+			return errors.NewError("rms_norm: x columns (%d) must match weight length (%d)", xCols, len(w))
+		}
+		data := make([]float64, 0, xRows*xCols)
+		for i := 0; i < xRows; i++ {
+			off := i * xCols
+			var ss float64
+			for j := 0; j < xCols; j++ {
+				v := xData[off+j]
+				ss += v * v
+			}
+			inv := 1.0 / math.Sqrt(ss/float64(xCols)+eps)
+			for j := 0; j < xCols; j++ {
+				data = append(data, xData[off+j]*inv*w[j])
+			}
+		}
+		return object.NewFloatArray2D(data, xRows, xCols)
+	}
+
+	x, errObj := toFloatMatrix(args[0], "rms_norm", "x")
+	if errObj != nil {
+		return errObj
+	}
+	rows := len(x)
+	if rows == 0 {
+		return object.NewFloatArray2D(nil, 0, 0)
+	}
+	cols := len(x[0])
+	data := make([]float64, 0, rows*cols)
+	for _, row := range x {
 		if len(row) != len(w) {
 			return errors.NewError("rms_norm: x columns (%d) must match weight length (%d)", len(row), len(w))
 		}
@@ -45,24 +70,16 @@ func fnRmsNorm(ctx context.Context, kwargs object.Kwargs, args ...object.Object)
 		}
 		ss /= float64(len(row))
 		inv := 1.0 / math.Sqrt(ss+eps)
-		result[i] = make([]float64, len(row))
 		for j, v := range row {
-			result[i][j] = v * inv * w[j]
+			data = append(data, v*inv*w[j])
 		}
 	}
-	return floatMatrixToObject(result)
+	return object.NewFloatArray2D(data, rows, cols)
 }
 
-// fnRope implements llm.rope: Rotary Position Embeddings.
-// Applies position-dependent rotation to pairs of dimensions (2i, 2i+1).
-// Standard positional encoding for most modern transformers.
 func fnRope(ctx context.Context, kwargs object.Kwargs, args ...object.Object) object.Object {
 	if err := errors.RangeArgs(args, 1, 2); err != nil {
 		return err
-	}
-	x, errObj := toFloatMatrix(args[0], "rope", "x")
-	if errObj != nil {
-		return errObj
 	}
 	startPos := int64(0)
 	if len(args) == 2 {
@@ -73,37 +90,89 @@ func fnRope(ctx context.Context, kwargs object.Kwargs, args ...object.Object) ob
 		startPos = sp
 	}
 
+	if xData, xRows, xCols, ok := object.GetFloatMatrix(args[0]); ok {
+		if xRows == 0 {
+			return object.NewFloatArray2D(nil, 0, 0)
+		}
+		if xCols%2 != 0 {
+			return errors.NewError("rope: last dimension must be even (got %d)", xCols)
+		}
+		halfDim := xCols / 2
+		data := make([]float64, 0, xRows*xCols)
+		for seqIdx := 0; seqIdx < xRows; seqIdx++ {
+			pos := float64(startPos) + float64(seqIdx)
+			off := seqIdx * xCols
+			for i := 0; i < halfDim; i++ {
+				freq := 1.0 / math.Pow(10000.0, 2.0*float64(i)/float64(xCols))
+				angle := freq * pos
+				cosA := math.Cos(angle)
+				sinA := math.Sin(angle)
+				data = append(data, xData[off+2*i]*cosA-xData[off+2*i+1]*sinA)
+				data = append(data, xData[off+2*i]*sinA+xData[off+2*i+1]*cosA)
+			}
+		}
+		return object.NewFloatArray2D(data, xRows, xCols)
+	}
+
+	x, errObj := toFloatMatrix(args[0], "rope", "x")
+	if errObj != nil {
+		return errObj
+	}
 	if len(x) == 0 {
-		return &object.List{Elements: []object.Object{}}
+		return object.NewFloatArray2D(nil, 0, 0)
 	}
 	dk := len(x[0])
 	if dk%2 != 0 {
 		return errors.NewError("rope: last dimension must be even (got %d)", dk)
 	}
 	halfDim := dk / 2
+	seqLen := len(x)
+	data := make([]float64, 0, seqLen*dk)
 
-	result := make([][]float64, len(x))
 	for seqIdx, row := range x {
 		pos := float64(startPos) + float64(seqIdx)
-		result[seqIdx] = make([]float64, dk)
 		for i := 0; i < halfDim; i++ {
 			freq := 1.0 / math.Pow(10000.0, 2.0*float64(i)/float64(dk))
 			angle := freq * pos
 			cosA := math.Cos(angle)
 			sinA := math.Sin(angle)
-			result[seqIdx][2*i] = row[2*i]*cosA - row[2*i+1]*sinA
-			result[seqIdx][2*i+1] = row[2*i]*sinA + row[2*i+1]*cosA
+			data = append(data, row[2*i]*cosA-row[2*i+1]*sinA)
+			data = append(data, row[2*i]*sinA+row[2*i+1]*cosA)
 		}
 	}
-	return floatMatrixToObject(result)
+	return object.NewFloatArray2D(data, seqLen, dk)
 }
 
-// fnSiluGate implements llm.silu_gate: fused SiLU activation + element-wise multiply.
-// Computes silu(gate) * up. The core of SwiGLU used in modern FFNs.
 func fnSiluGate(ctx context.Context, kwargs object.Kwargs, args ...object.Object) object.Object {
 	if err := errors.ExactArgs(args, 2); err != nil {
 		return err
 	}
+
+	gateData, gateRows, gateCols, gateOK := object.GetFloatMatrix(args[0])
+	upData, upRows, upCols, upOK := object.GetFloatMatrix(args[1])
+
+	if gateOK && upOK {
+		if gateRows != upRows {
+			return errors.NewError("silu_gate: gate and up must have the same number of rows")
+		}
+		if gateRows == 0 {
+			return object.NewFloatArray2D(nil, 0, 0)
+		}
+		if gateCols != upCols {
+			return errors.NewError("silu_gate: gate and up must have the same number of columns")
+		}
+		data := make([]float64, 0, gateRows*gateCols)
+		for i := 0; i < gateRows; i++ {
+			off := i * gateCols
+			for j := 0; j < gateCols; j++ {
+				g := gateData[off+j]
+				s := 1.0 / (1.0 + math.Exp(-g))
+				data = append(data, g*s*upData[off+j])
+			}
+		}
+		return object.NewFloatArray2D(data, gateRows, gateCols)
+	}
+
 	gate, errObj := toFloatMatrix(args[0], "silu_gate", "gate")
 	if errObj != nil {
 		return errObj
@@ -116,29 +185,94 @@ func fnSiluGate(ctx context.Context, kwargs object.Kwargs, args ...object.Object
 		return errors.NewError("silu_gate: gate and up must have the same number of rows")
 	}
 	if len(gate) == 0 {
-		return &object.List{Elements: []object.Object{}}
+		return object.NewFloatArray2D(nil, 0, 0)
 	}
 	if len(gate[0]) != len(up[0]) {
 		return errors.NewError("silu_gate: gate and up must have the same number of columns")
 	}
 
-	result := make([][]float64, len(gate))
+	rows := len(gate)
+	cols := len(gate[0])
+	data := make([]float64, 0, rows*cols)
 	for i := range gate {
-		result[i] = make([]float64, len(gate[i]))
 		for j := range gate[i] {
 			s := 1.0 / (1.0 + math.Exp(-gate[i][j]))
-			result[i][j] = gate[i][j] * s * up[i][j]
+			data = append(data, gate[i][j]*s*up[i][j])
 		}
 	}
-	return floatMatrixToObject(result)
+	return object.NewFloatArray2D(data, rows, cols)
 }
 
-// fnAttention implements llm.attention: scaled dot-product attention.
-// Computes softmax(Q @ K^T / sqrt(d_k)) @ V with optional causal masking.
 func fnAttention(ctx context.Context, kwargs object.Kwargs, args ...object.Object) object.Object {
 	if err := errors.RangeArgs(args, 3, 4); err != nil {
 		return err
 	}
+	causal := true
+	if len(args) == 4 {
+		c, err := args[3].AsBool()
+		if err != nil {
+			return errors.NewTypeError("BOOLEAN", args[3].Type().String())
+		}
+		causal = c
+	}
+
+	qData, qRows, qCols, qOK := object.GetFloatMatrix(args[0])
+	kData, kRows, kCols, kOK := object.GetFloatMatrix(args[1])
+	vData, vRows, vCols, vOK := object.GetFloatMatrix(args[2])
+
+	if qOK && kOK && vOK {
+		if qRows == 0 || kRows == 0 || vRows == 0 {
+			return errors.NewError("attention: inputs cannot be empty")
+		}
+		if kCols != qCols || vCols != qCols {
+			return errors.NewError("attention: q, k, v must have the same inner dimension")
+		}
+		if kRows != vRows {
+			return errors.NewError("attention: k and v must have the same number of rows")
+		}
+		dk := qCols
+		scale := 1.0 / math.Sqrt(float64(dk))
+		data := make([]float64, 0, qRows*dk)
+		for qi := 0; qi < qRows; qi++ {
+			qOff := qi * dk
+			scores := make([]float64, kRows)
+			for ki := 0; ki < kRows; ki++ {
+				kOff := ki * dk
+				var dot float64
+				for d := 0; d < dk; d++ {
+					dot += qData[qOff+d] * kData[kOff+d]
+				}
+				scores[ki] = dot * scale
+			}
+			if causal && qRows > 1 {
+				for ki := qi + 1; ki < kRows; ki++ {
+					scores[ki] = math.Inf(-1)
+				}
+			}
+			maxScore := scores[0]
+			for _, s := range scores[1:] {
+				if s > maxScore {
+					maxScore = s
+				}
+			}
+			var sumExp float64
+			exps := make([]float64, kRows)
+			for i, s := range scores {
+				exps[i] = math.Exp(s - maxScore)
+				sumExp += exps[i]
+			}
+			invSum := 1.0 / sumExp
+			for d := 0; d < dk; d++ {
+				var val float64
+				for ki := 0; ki < kRows; ki++ {
+					val += exps[ki] * invSum * vData[ki*dk+d]
+				}
+				data = append(data, val)
+			}
+		}
+		return object.NewFloatArray2D(data, qRows, dk)
+	}
+
 	q, errObj := toFloatMatrix(args[0], "attention", "q")
 	if errObj != nil {
 		return errObj
@@ -150,14 +284,6 @@ func fnAttention(ctx context.Context, kwargs object.Kwargs, args ...object.Objec
 	v, errObj := toFloatMatrix(args[2], "attention", "v")
 	if errObj != nil {
 		return errObj
-	}
-	causal := true
-	if len(args) == 4 {
-		c, err := args[3].AsBool()
-		if err != nil {
-			return errors.NewTypeError("BOOLEAN", args[3].Type().String())
-		}
-		causal = c
 	}
 
 	if len(q) == 0 || len(k) == 0 || len(v) == 0 {
@@ -175,7 +301,7 @@ func fnAttention(ctx context.Context, kwargs object.Kwargs, args ...object.Objec
 	kvLen := len(k)
 	scale := 1.0 / math.Sqrt(float64(dk))
 
-	output := make([][]float64, qLen)
+	data := make([]float64, 0, qLen*dk)
 	for qi := 0; qi < qLen; qi++ {
 		scores := make([]float64, kvLen)
 		for ki := 0; ki < kvLen; ki++ {
@@ -205,29 +331,73 @@ func fnAttention(ctx context.Context, kwargs object.Kwargs, args ...object.Objec
 			sumExp += exps[i]
 		}
 		invSum := 1.0 / sumExp
-		weights := make([]float64, kvLen)
-		for i, e := range exps {
-			weights[i] = e * invSum
-		}
 
-		output[qi] = make([]float64, dk)
 		for d := 0; d < dk; d++ {
 			var val float64
 			for ki := 0; ki < kvLen; ki++ {
-				val += weights[ki] * v[ki][d]
+				val += exps[ki] * invSum * v[ki][d]
 			}
-			output[qi][d] = val
+			data = append(data, val)
 		}
 	}
-	return floatMatrixToObject(output)
+	return object.NewFloatArray2D(data, qLen, dk)
 }
 
-// fnLinear implements llm.linear: fused matmul + optional bias add.
-// Computes x @ weight.T + bias where weight has shape (out, in).
 func fnLinear(ctx context.Context, kwargs object.Kwargs, args ...object.Object) object.Object {
 	if err := errors.RangeArgs(args, 2, 3); err != nil {
 		return err
 	}
+	var bias []float64
+	if len(args) == 3 {
+		var errObj object.Object
+		bias, errObj = toFloatList(args[2], "linear", "bias")
+		if errObj != nil {
+			return errObj
+		}
+	}
+
+	if xData, xRows, xCols, ok := object.GetFloatMatrix(args[0]); ok {
+		wData, wRows, wCols, _ := object.GetFloatMatrix(args[1])
+		if wData == nil {
+			wMat, errObj := toFloatMatrix(args[1], "linear", "weight")
+			if errObj != nil {
+				return errObj
+			}
+			wRows = len(wMat)
+			if wRows == 0 {
+				return errors.NewError("linear: inputs cannot be empty")
+			}
+			wCols = len(wMat[0])
+			flatW := make([]float64, 0, wRows*wCols)
+			for _, r := range wMat {
+				flatW = append(flatW, r...)
+			}
+			wData = flatW
+		}
+		if xRows == 0 || wRows == 0 {
+			return errors.NewError("linear: inputs cannot be empty")
+		}
+		if wCols != xCols {
+			return errors.NewError("linear: weight columns (%d) must match x columns (%d)", wCols, xCols)
+		}
+		data := make([]float64, 0, xRows*wRows)
+		for xi := 0; xi < xRows; xi++ {
+			xOff := xi * xCols
+			for j := 0; j < wRows; j++ {
+				wOff := j * wCols
+				var sum float64
+				for l := 0; l < xCols; l++ {
+					sum += xData[xOff+l] * wData[wOff+l]
+				}
+				if bias != nil {
+					sum += bias[j]
+				}
+				data = append(data, sum)
+			}
+		}
+		return object.NewFloatArray2D(data, xRows, wRows)
+	}
+
 	x, errObj := toFloatMatrix(args[0], "linear", "x")
 	if errObj != nil {
 		return errObj
@@ -235,13 +405,6 @@ func fnLinear(ctx context.Context, kwargs object.Kwargs, args ...object.Object) 
 	weight, errObj := toFloatMatrix(args[1], "linear", "weight")
 	if errObj != nil {
 		return errObj
-	}
-	var bias []float64
-	if len(args) == 3 {
-		bias, errObj = toFloatList(args[2], "linear", "bias")
-		if errObj != nil {
-			return errObj
-		}
 	}
 
 	if len(x) == 0 || len(weight) == 0 {
@@ -252,10 +415,10 @@ func fnLinear(ctx context.Context, kwargs object.Kwargs, args ...object.Object) 
 		return errors.NewError("linear: weight columns (%d) must match x columns (%d)", len(weight[0]), inFeatures)
 	}
 	outFeatures := len(weight)
+	seqLen := len(x)
 
-	result := make([][]float64, len(x))
-	for i, row := range x {
-		result[i] = make([]float64, outFeatures)
+	data := make([]float64, 0, seqLen*outFeatures)
+	for _, row := range x {
 		for j := 0; j < outFeatures; j++ {
 			var sum float64
 			for l := 0; l < inFeatures; l++ {
@@ -264,18 +427,65 @@ func fnLinear(ctx context.Context, kwargs object.Kwargs, args ...object.Object) 
 			if bias != nil {
 				sum += bias[j]
 			}
-			result[i][j] = sum
+			data = append(data, sum)
 		}
 	}
-	return floatMatrixToObject(result)
+	return object.NewFloatArray2D(data, seqLen, outFeatures)
 }
 
-// fnLinearRow implements llm.linear_row: last-row-only linear.
-// Same as linear() but computes only the last row, saving (seq_len-1)*out_features ops.
 func fnLinearRow(ctx context.Context, kwargs object.Kwargs, args ...object.Object) object.Object {
 	if err := errors.RangeArgs(args, 2, 3); err != nil {
 		return err
 	}
+	var bias []float64
+	if len(args) == 3 {
+		var errObj object.Object
+		bias, errObj = toFloatList(args[2], "linear_row", "bias")
+		if errObj != nil {
+			return errObj
+		}
+	}
+
+	if xData, xRows, xCols, ok := object.GetFloatMatrix(args[0]); ok {
+		wData, wRows, wCols, _ := object.GetFloatMatrix(args[1])
+		if wData == nil {
+			wMat, errObj := toFloatMatrix(args[1], "linear_row", "weight")
+			if errObj != nil {
+				return errObj
+			}
+			if len(wMat) == 0 {
+				return errors.NewError("linear_row: inputs cannot be empty")
+			}
+			wRows = len(wMat)
+			wCols = len(wMat[0])
+			flatW := make([]float64, 0, wRows*wCols)
+			for _, r := range wMat {
+				flatW = append(flatW, r...)
+			}
+			wData = flatW
+		}
+		if xRows == 0 || wRows == 0 {
+			return errors.NewError("linear_row: inputs cannot be empty")
+		}
+		if wCols != xCols {
+			return errors.NewError("linear_row: weight columns (%d) must match x columns (%d)", wCols, xCols)
+		}
+		lastOff := (xRows - 1) * xCols
+		result := make([]float64, wRows)
+		for j := 0; j < wRows; j++ {
+			wOff := j * wCols
+			var sum float64
+			for l := 0; l < xCols; l++ {
+				sum += xData[lastOff+l] * wData[wOff+l]
+			}
+			if bias != nil {
+				sum += bias[j]
+			}
+			result[j] = sum
+		}
+		return object.NewFloatArray1D(result)
+	}
+
 	x, errObj := toFloatMatrix(args[0], "linear_row", "x")
 	if errObj != nil {
 		return errObj
@@ -283,13 +493,6 @@ func fnLinearRow(ctx context.Context, kwargs object.Kwargs, args ...object.Objec
 	weight, errObj := toFloatMatrix(args[1], "linear_row", "weight")
 	if errObj != nil {
 		return errObj
-	}
-	var bias []float64
-	if len(args) == 3 {
-		bias, errObj = toFloatList(args[2], "linear_row", "bias")
-		if errObj != nil {
-			return errObj
-		}
 	}
 
 	if len(x) == 0 || len(weight) == 0 {
@@ -313,17 +516,14 @@ func fnLinearRow(ctx context.Context, kwargs object.Kwargs, args ...object.Objec
 		}
 		result[j] = sum
 	}
-	return floatListToObject(result)
+	return object.NewFloatArray1D(result)
 }
 
-// indexedFloat pairs an element index with its float value for partial sorting.
 type indexedFloat struct {
 	index int
 	value float64
 }
 
-// fnTopK implements llm.top_k: O(n) partial sort for top-k selection.
-// Uses a maintained top-k buffer with binary search insertion.
 func fnTopK(ctx context.Context, kwargs object.Kwargs, args ...object.Object) object.Object {
 	if err := errors.ExactArgs(args, 2); err != nil {
 		return err
@@ -376,9 +576,6 @@ func fnTopK(ctx context.Context, kwargs object.Kwargs, args ...object.Object) ob
 	return &object.List{Elements: result}
 }
 
-// fnDequantizeQ8 implements llm.dequantize_q8: int8 dequantization with per-group scales.
-// Compatible with the Q8_0 format used by llama.cpp/GGUF.
-// Each value: float = int8_value * scale[group_index].
 func fnDequantizeQ8(ctx context.Context, kwargs object.Kwargs, args ...object.Object) object.Object {
 	if err := errors.ExactArgs(args, 3); err != nil {
 		return err
@@ -401,7 +598,7 @@ func fnDequantizeQ8(ctx context.Context, kwargs object.Kwargs, args ...object.Ob
 
 	n := len(dataList.Elements)
 	if n == 0 {
-		return &object.List{Elements: []object.Object{}}
+		return object.NewFloatArray1D(nil)
 	}
 	numGroups := (n + int(groupSize) - 1) / int(groupSize)
 	if len(scales) < numGroups {
@@ -425,13 +622,9 @@ func fnDequantizeQ8(ctx context.Context, kwargs object.Kwargs, args ...object.Ob
 		groupIdx := i / int(groupSize)
 		result[i] = float64(d) * scales[groupIdx]
 	}
-	return floatListToObject(result)
+	return object.NewFloatArray1D(result)
 }
 
-// fnDequantizeQ8_0 implements llm.dequantize_q8_0: native GGUF Q8_0 block dequantization.
-// Takes raw block data (from fs.read_bytes) and number of groups.
-// Each Q8_0 block is 34 bytes: 2-byte f16 scale + 32-byte int8 values.
-// Returns n_groups * 32 dequantized floats.
 func fnDequantizeQ8_0(ctx context.Context, kwargs object.Kwargs, args ...object.Object) object.Object {
 	if err := errors.ExactArgs(args, 2); err != nil {
 		return err
@@ -468,10 +661,9 @@ func fnDequantizeQ8_0(ctx context.Context, kwargs object.Kwargs, args ...object.
 			idx++
 		}
 	}
-	return floatListToObject(result)
+	return object.NewFloatArray1D(result)
 }
 
-// float16ToFloat64 converts IEEE 754 half-precision bits to float64.
 func float16ToFloat64(bits uint16) float64 {
 	sign := float64(1)
 	if bits&0x8000 != 0 {
@@ -493,16 +685,9 @@ func float16ToFloat64(bits uint16) float64 {
 	}
 }
 
-// fnLinearQ8 implements llm.linear_q8: quantized matmul for Q8_0 weights.
-// Computes x @ weight.T where weight is stored as raw Q8_0 blocks.
-// Optimized: fast f16 decode, pre-multiplied scales, reduced allocations.
 func fnLinearQ8(ctx context.Context, kwargs object.Kwargs, args ...object.Object) object.Object {
 	if err := errors.ExactArgs(args, 3); err != nil {
 		return err
-	}
-	xList, ok := args[0].(*object.List)
-	if !ok {
-		return errors.NewTypeError("LIST", args[0].Type().String())
 	}
 	raw, ok := args[1].(*object.String)
 	if !ok {
@@ -520,30 +705,7 @@ func fnLinearQ8(ctx context.Context, kwargs object.Kwargs, args ...object.Object
 	rawBytes := []byte(raw.Value)
 	rowBytes := groupsPerRow * 34
 	outFeatures := len(rawBytes) / rowBytes
-	seqLen := len(xList.Elements)
-	if seqLen == 0 || outFeatures == 0 {
-		return errors.NewError("linear_q8: inputs cannot be empty")
-	}
 	inFeatures := groupsPerRow * 32
-
-	xFlat := make([]float64, seqLen*inFeatures)
-	for xi, rowObj := range xList.Elements {
-		row, ok := rowObj.(*object.List)
-		if !ok {
-			return errors.NewError("linear_q8: x must be a list of lists")
-		}
-		if len(row.Elements) != inFeatures {
-			return errors.NewError("linear_q8: x columns (%d) must match in_features (%d)", len(row.Elements), inFeatures)
-		}
-		off := xi * inFeatures
-		for i, el := range row.Elements {
-			f, e := el.AsFloat()
-			if e != nil {
-				return errors.NewTypeError("INTEGER or FLOAT", el.Type().String())
-			}
-			xFlat[off+i] = f
-		}
-	}
 
 	scales := make([]float64, outFeatures*groupsPerRow)
 	quantData := make([]int8, outFeatures*inFeatures)
@@ -559,11 +721,80 @@ func fnLinearQ8(ctx context.Context, kwargs object.Kwargs, args ...object.Object
 		}
 	}
 
-	resultRows := make([]object.Object, seqLen)
+	if xData, xRows, xCols, ok := object.GetFloatMatrix(args[0]); ok {
+		if xRows == 0 || outFeatures == 0 {
+			return errors.NewError("linear_q8: inputs cannot be empty")
+		}
+		if xCols != inFeatures {
+			return errors.NewError("linear_q8: x columns (%d) must match in_features (%d)", xCols, inFeatures)
+		}
+		data := make([]float64, 0, xRows*outFeatures)
+		for xi := 0; xi < xRows; xi++ {
+			rowOff2 := xi * xCols
+			for j := 0; j < outFeatures; j++ {
+				wOff := j * inFeatures
+				sOff := j * groupsPerRow
+				var sum float64
+				for g := 0; g < groupsPerRow; g++ {
+					s := scales[sOff+g]
+					dOff := wOff + g*32
+					xBase := rowOff2 + g*32
+					sum += float64(quantData[dOff])*s*xData[xBase] +
+						float64(quantData[dOff+1])*s*xData[xBase+1] +
+						float64(quantData[dOff+2])*s*xData[xBase+2] +
+						float64(quantData[dOff+3])*s*xData[xBase+3] +
+						float64(quantData[dOff+4])*s*xData[xBase+4] +
+						float64(quantData[dOff+5])*s*xData[xBase+5] +
+						float64(quantData[dOff+6])*s*xData[xBase+6] +
+						float64(quantData[dOff+7])*s*xData[xBase+7] +
+						float64(quantData[dOff+8])*s*xData[xBase+8] +
+						float64(quantData[dOff+9])*s*xData[xBase+9] +
+						float64(quantData[dOff+10])*s*xData[xBase+10] +
+						float64(quantData[dOff+11])*s*xData[xBase+11] +
+						float64(quantData[dOff+12])*s*xData[xBase+12] +
+						float64(quantData[dOff+13])*s*xData[xBase+13] +
+						float64(quantData[dOff+14])*s*xData[xBase+14] +
+						float64(quantData[dOff+15])*s*xData[xBase+15] +
+						float64(quantData[dOff+16])*s*xData[xBase+16] +
+						float64(quantData[dOff+17])*s*xData[xBase+17] +
+						float64(quantData[dOff+18])*s*xData[xBase+18] +
+						float64(quantData[dOff+19])*s*xData[xBase+19] +
+						float64(quantData[dOff+20])*s*xData[xBase+20] +
+						float64(quantData[dOff+21])*s*xData[xBase+21] +
+						float64(quantData[dOff+22])*s*xData[xBase+22] +
+						float64(quantData[dOff+23])*s*xData[xBase+23] +
+						float64(quantData[dOff+24])*s*xData[xBase+24] +
+						float64(quantData[dOff+25])*s*xData[xBase+25] +
+						float64(quantData[dOff+26])*s*xData[xBase+26] +
+						float64(quantData[dOff+27])*s*xData[xBase+27] +
+						float64(quantData[dOff+28])*s*xData[xBase+28] +
+						float64(quantData[dOff+29])*s*xData[xBase+29] +
+						float64(quantData[dOff+30])*s*xData[xBase+30] +
+						float64(quantData[dOff+31])*s*xData[xBase+31]
+				}
+				data = append(data, sum)
+			}
+		}
+		return object.NewFloatArray2D(data, xRows, outFeatures)
+	}
+
+	xMat, errObj := toFloatMatrix(args[0], "linear_q8", "x")
+	if errObj != nil {
+		return errObj
+	}
+	seqLen := len(xMat)
+	if seqLen == 0 || outFeatures == 0 {
+		return errors.NewError("linear_q8: inputs cannot be empty")
+	}
+	for i, row := range xMat {
+		if len(row) != inFeatures {
+			return errors.NewError("linear_q8: x row %d has %d columns, want %d", i, len(row), inFeatures)
+		}
+	}
+
+	data := make([]float64, 0, seqLen*outFeatures)
 	for xi := 0; xi < seqLen; xi++ {
-		xOff := xi * inFeatures
-		out := make([]float64, outFeatures)
-		xRow := xFlat[xOff : xOff+inFeatures]
+		xRow := xMat[xi]
 		for j := 0; j < outFeatures; j++ {
 			wOff := j * inFeatures
 			sOff := j * groupsPerRow
@@ -605,26 +836,15 @@ func fnLinearQ8(ctx context.Context, kwargs object.Kwargs, args ...object.Object
 					float64(quantData[dOff+30])*s*xRow[xOff2+30] +
 					float64(quantData[dOff+31])*s*xRow[xOff2+31]
 			}
-			out[j] = sum
+			data = append(data, sum)
 		}
-		rowElems := make([]object.Object, outFeatures)
-		for j, v := range out {
-			rowElems[j] = &object.Float{Value: v}
-		}
-		resultRows[xi] = &object.List{Elements: rowElems}
 	}
-	return &object.List{Elements: resultRows}
+	return object.NewFloatArray2D(data, seqLen, outFeatures)
 }
 
-// fnLinearRowQ8 implements llm.linear_row_q8: last-row-only quantized matmul.
-// Same as linear_q8 but computes only the last row of x, returning a vector.
 func fnLinearRowQ8(ctx context.Context, kwargs object.Kwargs, args ...object.Object) object.Object {
 	if err := errors.ExactArgs(args, 3); err != nil {
 		return err
-	}
-	xList, ok := args[0].(*object.List)
-	if !ok {
-		return errors.NewTypeError("LIST", args[0].Type().String())
 	}
 	raw, ok := args[1].(*object.String)
 	if !ok {
@@ -642,27 +862,7 @@ func fnLinearRowQ8(ctx context.Context, kwargs object.Kwargs, args ...object.Obj
 	rawBytes := []byte(raw.Value)
 	rowBytes := groupsPerRow * 34
 	outFeatures := len(rawBytes) / rowBytes
-	if len(xList.Elements) == 0 || outFeatures == 0 {
-		return errors.NewError("linear_row_q8: inputs cannot be empty")
-	}
 	inFeatures := groupsPerRow * 32
-
-	lastRowObj := xList.Elements[len(xList.Elements)-1]
-	lastRowList, ok := lastRowObj.(*object.List)
-	if !ok {
-		return errors.NewError("linear_row_q8: x must be a list of lists")
-	}
-	if len(lastRowList.Elements) != inFeatures {
-		return errors.NewError("linear_row_q8: x columns (%d) must match in_features (%d)", len(lastRowList.Elements), inFeatures)
-	}
-	lastRow := make([]float64, inFeatures)
-	for i, el := range lastRowList.Elements {
-		f, e := el.AsFloat()
-		if e != nil {
-			return errors.NewTypeError("INTEGER or FLOAT", el.Type().String())
-		}
-		lastRow[i] = f
-	}
 
 	scales := make([]float64, outFeatures*groupsPerRow)
 	quantData := make([]int8, outFeatures*inFeatures)
@@ -678,7 +878,75 @@ func fnLinearRowQ8(ctx context.Context, kwargs object.Kwargs, args ...object.Obj
 		}
 	}
 
-	result := make([]object.Object, outFeatures)
+	if xData, xRows, xCols, ok := object.GetFloatMatrix(args[0]); ok {
+		if xRows == 0 || outFeatures == 0 {
+			return errors.NewError("linear_row_q8: inputs cannot be empty")
+		}
+		if xCols != inFeatures {
+			return errors.NewError("linear_row_q8: x columns (%d) must match in_features (%d)", xCols, inFeatures)
+		}
+		lastOff := (xRows - 1) * xCols
+		result := make([]float64, outFeatures)
+		for j := 0; j < outFeatures; j++ {
+			wOff := j * inFeatures
+			sOff := j * groupsPerRow
+			var sum float64
+			for g := 0; g < groupsPerRow; g++ {
+				s := scales[sOff+g]
+				dOff := wOff + g*32
+				xBase := lastOff + g*32
+				sum += float64(quantData[dOff])*s*xData[xBase] +
+					float64(quantData[dOff+1])*s*xData[xBase+1] +
+					float64(quantData[dOff+2])*s*xData[xBase+2] +
+					float64(quantData[dOff+3])*s*xData[xBase+3] +
+					float64(quantData[dOff+4])*s*xData[xBase+4] +
+					float64(quantData[dOff+5])*s*xData[xBase+5] +
+					float64(quantData[dOff+6])*s*xData[xBase+6] +
+					float64(quantData[dOff+7])*s*xData[xBase+7] +
+					float64(quantData[dOff+8])*s*xData[xBase+8] +
+					float64(quantData[dOff+9])*s*xData[xBase+9] +
+					float64(quantData[dOff+10])*s*xData[xBase+10] +
+					float64(quantData[dOff+11])*s*xData[xBase+11] +
+					float64(quantData[dOff+12])*s*xData[xBase+12] +
+					float64(quantData[dOff+13])*s*xData[xBase+13] +
+					float64(quantData[dOff+14])*s*xData[xBase+14] +
+					float64(quantData[dOff+15])*s*xData[xBase+15] +
+					float64(quantData[dOff+16])*s*xData[xBase+16] +
+					float64(quantData[dOff+17])*s*xData[xBase+17] +
+					float64(quantData[dOff+18])*s*xData[xBase+18] +
+					float64(quantData[dOff+19])*s*xData[xBase+19] +
+					float64(quantData[dOff+20])*s*xData[xBase+20] +
+					float64(quantData[dOff+21])*s*xData[xBase+21] +
+					float64(quantData[dOff+22])*s*xData[xBase+22] +
+					float64(quantData[dOff+23])*s*xData[xBase+23] +
+					float64(quantData[dOff+24])*s*xData[xBase+24] +
+					float64(quantData[dOff+25])*s*xData[xBase+25] +
+					float64(quantData[dOff+26])*s*xData[xBase+26] +
+					float64(quantData[dOff+27])*s*xData[xBase+27] +
+					float64(quantData[dOff+28])*s*xData[xBase+28] +
+					float64(quantData[dOff+29])*s*xData[xBase+29] +
+					float64(quantData[dOff+30])*s*xData[xBase+30] +
+					float64(quantData[dOff+31])*s*xData[xBase+31]
+			}
+			result[j] = sum
+		}
+		return object.NewFloatArray1D(result)
+	}
+
+	xMat, errObj := toFloatMatrix(args[0], "linear_row_q8", "x")
+	if errObj != nil {
+		return errObj
+	}
+	if len(xMat) == 0 || outFeatures == 0 {
+		return errors.NewError("linear_row_q8: inputs cannot be empty")
+	}
+
+	lastRow := xMat[len(xMat)-1]
+	if len(lastRow) != inFeatures {
+		return errors.NewError("linear_row_q8: x columns (%d) must match in_features (%d)", len(lastRow), inFeatures)
+	}
+
+	result := make([]float64, outFeatures)
 	for j := 0; j < outFeatures; j++ {
 		wOff := j * inFeatures
 		sOff := j * groupsPerRow
@@ -720,7 +988,232 @@ func fnLinearRowQ8(ctx context.Context, kwargs object.Kwargs, args ...object.Obj
 				float64(quantData[dOff+30])*s*lastRow[xOff+30] +
 				float64(quantData[dOff+31])*s*lastRow[xOff+31]
 		}
-		result[j] = &object.Float{Value: sum}
+		result[j] = sum
 	}
-	return &object.List{Elements: result}
+	return object.NewFloatArray1D(result)
+}
+
+func dequantizeQ4_0Block(raw []byte, off int) (scale float64, values [32]int8) {
+	scale = float16ToFloat64(binary.LittleEndian.Uint16(raw[off : off+2]))
+	for i := 0; i < 16; i++ {
+		b := raw[off+2+i]
+		values[i*2] = int8(b&0x0F) - 8
+		values[i*2+1] = int8((b>>4)&0x0F) - 8
+	}
+	return
+}
+
+func fnDequantizeQ4_0(ctx context.Context, kwargs object.Kwargs, args ...object.Object) object.Object {
+	if err := errors.ExactArgs(args, 2); err != nil {
+		return err
+	}
+	raw, ok := args[0].(*object.String)
+	if !ok {
+		return errors.NewTypeError("STRING", args[0].Type().String())
+	}
+	nGroups, err := args[1].AsInt()
+	if err != nil {
+		return errors.NewTypeError("INTEGER", args[1].Type().String())
+	}
+	rawBytes := []byte(raw.Value)
+	result := make([]float64, int(nGroups)*32)
+	for g := 0; g < int(nGroups); g++ {
+		scale, values := dequantizeQ4_0Block(rawBytes, g*18)
+		off := g * 32
+		for i := 0; i < 32; i++ {
+			result[off+i] = float64(values[i]) * scale
+		}
+	}
+	return object.NewFloatArray1D(result)
+}
+
+func fnLinearQ4(ctx context.Context, kwargs object.Kwargs, args ...object.Object) object.Object {
+	if err := errors.ExactArgs(args, 3); err != nil {
+		return err
+	}
+	raw, ok := args[1].(*object.String)
+	if !ok {
+		return errors.NewTypeError("STRING", args[1].Type().String())
+	}
+	gpr, err := args[2].AsInt()
+	if err != nil {
+		return errors.NewTypeError("INTEGER", args[2].Type().String())
+	}
+	if gpr <= 0 {
+		return errors.NewError("linear_q4: groups_per_row must be positive")
+	}
+	groupsPerRow := int(gpr)
+
+	rawBytes := []byte(raw.Value)
+	rowBytes := groupsPerRow * 18
+	outFeatures := len(rawBytes) / rowBytes
+	inFeatures := groupsPerRow * 32
+
+	scales := make([]float64, outFeatures*groupsPerRow)
+	quantData := make([]int8, outFeatures*inFeatures)
+	for j := 0; j < outFeatures; j++ {
+		rOff := j * rowBytes
+		for g := 0; g < groupsPerRow; g++ {
+			base := rOff + g*18
+			s, vals := dequantizeQ4_0Block(rawBytes, base)
+			scales[j*groupsPerRow+g] = s
+			dataOff := j*inFeatures + g*32
+			for i := 0; i < 32; i++ {
+				quantData[dataOff+i] = vals[i]
+			}
+		}
+	}
+
+	if xData, xRows, xCols, ok := object.GetFloatMatrix(args[0]); ok {
+		if xRows == 0 || outFeatures == 0 {
+			return errors.NewError("linear_q4: inputs cannot be empty")
+		}
+		if xCols != inFeatures {
+			return errors.NewError("linear_q4: x columns (%d) must match in_features (%d)", xCols, inFeatures)
+		}
+		data := make([]float64, 0, xRows*outFeatures)
+		for xi := 0; xi < xRows; xi++ {
+			rowOff := xi * xCols
+			for j := 0; j < outFeatures; j++ {
+				wOff := j * inFeatures
+				sOff := j * groupsPerRow
+				var sum float64
+				for g := 0; g < groupsPerRow; g++ {
+					s := scales[sOff+g]
+					dOff := wOff + g*32
+					xBase := rowOff + g*32
+					for i := 0; i < 32; i++ {
+						sum += float64(quantData[dOff+i]) * s * xData[xBase+i]
+					}
+				}
+				data = append(data, sum)
+			}
+		}
+		return object.NewFloatArray2D(data, xRows, outFeatures)
+	}
+
+	xMat, errObj := toFloatMatrix(args[0], "linear_q4", "x")
+	if errObj != nil {
+		return errObj
+	}
+	seqLen := len(xMat)
+	if seqLen == 0 || outFeatures == 0 {
+		return errors.NewError("linear_q4: inputs cannot be empty")
+	}
+	for i, row := range xMat {
+		if len(row) != inFeatures {
+			return errors.NewError("linear_q4: x row %d has %d columns, want %d", i, len(row), inFeatures)
+		}
+	}
+	data := make([]float64, 0, seqLen*outFeatures)
+	for xi := 0; xi < seqLen; xi++ {
+		xRow := xMat[xi]
+		for j := 0; j < outFeatures; j++ {
+			wOff := j * inFeatures
+			sOff := j * groupsPerRow
+			var sum float64
+			for g := 0; g < groupsPerRow; g++ {
+				s := scales[sOff+g]
+				dOff := wOff + g*32
+				xOff2 := g * 32
+				for i := 0; i < 32; i++ {
+					sum += float64(quantData[dOff+i]) * s * xRow[xOff2+i]
+				}
+			}
+			data = append(data, sum)
+		}
+	}
+	return object.NewFloatArray2D(data, seqLen, outFeatures)
+}
+
+func fnLinearRowQ4(ctx context.Context, kwargs object.Kwargs, args ...object.Object) object.Object {
+	if err := errors.ExactArgs(args, 3); err != nil {
+		return err
+	}
+	raw, ok := args[1].(*object.String)
+	if !ok {
+		return errors.NewTypeError("STRING", args[1].Type().String())
+	}
+	gpr, err := args[2].AsInt()
+	if err != nil {
+		return errors.NewTypeError("INTEGER", args[2].Type().String())
+	}
+	if gpr <= 0 {
+		return errors.NewError("linear_row_q4: groups_per_row must be positive")
+	}
+	groupsPerRow := int(gpr)
+
+	rawBytes := []byte(raw.Value)
+	rowBytes := groupsPerRow * 18
+	outFeatures := len(rawBytes) / rowBytes
+	inFeatures := groupsPerRow * 32
+
+	scales := make([]float64, outFeatures*groupsPerRow)
+	quantData := make([]int8, outFeatures*inFeatures)
+	for j := 0; j < outFeatures; j++ {
+		rOff := j * rowBytes
+		for g := 0; g < groupsPerRow; g++ {
+			base := rOff + g*18
+			s, vals := dequantizeQ4_0Block(rawBytes, base)
+			scales[j*groupsPerRow+g] = s
+			dataOff := j*inFeatures + g*32
+			for i := 0; i < 32; i++ {
+				quantData[dataOff+i] = vals[i]
+			}
+		}
+	}
+
+	if xData, xRows, xCols, ok := object.GetFloatMatrix(args[0]); ok {
+		if xRows == 0 || outFeatures == 0 {
+			return errors.NewError("linear_row_q4: inputs cannot be empty")
+		}
+		if xCols != inFeatures {
+			return errors.NewError("linear_row_q4: x columns (%d) must match in_features (%d)", xCols, inFeatures)
+		}
+		lastOff := (xRows - 1) * xCols
+		result := make([]float64, outFeatures)
+		for j := 0; j < outFeatures; j++ {
+			wOff := j * inFeatures
+			sOff := j * groupsPerRow
+			var sum float64
+			for g := 0; g < groupsPerRow; g++ {
+				s := scales[sOff+g]
+				dOff := wOff + g*32
+				xBase := lastOff + g*32
+				for i := 0; i < 32; i++ {
+					sum += float64(quantData[dOff+i]) * s * xData[xBase+i]
+				}
+			}
+			result[j] = sum
+		}
+		return object.NewFloatArray1D(result)
+	}
+
+	xMat, errObj := toFloatMatrix(args[0], "linear_row_q4", "x")
+	if errObj != nil {
+		return errObj
+	}
+	if len(xMat) == 0 || outFeatures == 0 {
+		return errors.NewError("linear_row_q4: inputs cannot be empty")
+	}
+	lastRow := xMat[len(xMat)-1]
+	if len(lastRow) != inFeatures {
+		return errors.NewError("linear_row_q4: x columns (%d) must match in_features (%d)", len(lastRow), inFeatures)
+	}
+	result := make([]float64, outFeatures)
+	for j := 0; j < outFeatures; j++ {
+		wOff := j * inFeatures
+		sOff := j * groupsPerRow
+		var sum float64
+		for g := 0; g < groupsPerRow; g++ {
+			s := scales[sOff+g]
+			dOff := wOff + g*32
+			xOff := g * 32
+			for i := 0; i < 32; i++ {
+				sum += float64(quantData[dOff+i]) * s * lastRow[xOff+i]
+			}
+		}
+		result[j] = sum
+	}
+	return object.NewFloatArray1D(result)
 }

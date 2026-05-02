@@ -5,12 +5,15 @@ import (
 	"github.com/paularlott/scriptling/object"
 )
 
-// toFloatList converts a Scriptling LIST of numbers into a Go []float64.
-// Returns an error object if conversion fails.
 func toFloatList(obj object.Object, fnName, paramName string) ([]float64, object.Object) {
+	if fa, ok := obj.(*object.FloatArray); ok && !fa.Is2D() {
+		result := make([]float64, len(fa.Data))
+		copy(result, fa.Data)
+		return result, nil
+	}
 	list, ok := obj.(*object.List)
 	if !ok {
-		return nil, errors.NewTypeError("LIST", obj.Type().String())
+		return nil, errors.NewTypeError("LIST or FLOAT_ARRAY", obj.Type().String())
 	}
 	vals := make([]float64, len(list.Elements))
 	for i, el := range list.Elements {
@@ -23,20 +26,42 @@ func toFloatList(obj object.Object, fnName, paramName string) ([]float64, object
 	return vals, nil
 }
 
-// toFloatMatrix converts a Scriptling LIST of LIST of numbers into a Go [][]float64.
-// Validates that the matrix is rectangular. Returns an error object if
-// conversion fails or rows have inconsistent lengths.
 func toFloatMatrix(obj object.Object, fnName, paramName string) ([][]float64, object.Object) {
+	if fa, ok := obj.(*object.FloatArray); ok && fa.Is2D() {
+		rows := fa.Rows()
+		result := make([][]float64, rows)
+		for i := 0; i < rows; i++ {
+			row := fa.Row(i)
+			rowCopy := make([]float64, len(row))
+			copy(rowCopy, row)
+			result[i] = rowCopy
+		}
+		return result, nil
+	}
+	if fa, ok := obj.(*object.FloatArray); ok && !fa.Is2D() {
+		return nil, errors.NewError("%s: %s must be a 2D matrix, got 1D FloatArray", fnName, paramName)
+	}
 	list, ok := obj.(*object.List)
 	if !ok {
-		return nil, errors.NewTypeError("LIST", obj.Type().String())
+		return nil, errors.NewTypeError("LIST or FLOAT_ARRAY", obj.Type().String())
 	}
 	rows := make([][]float64, len(list.Elements))
 	width := -1
 	for i, rowObj := range list.Elements {
+		if innerFA, ok := rowObj.(*object.FloatArray); ok && !innerFA.Is2D() {
+			if width == -1 {
+				width = len(innerFA.Data)
+			} else if len(innerFA.Data) != width {
+				return nil, errors.NewError("%s: %s must be a rectangular matrix", fnName, paramName)
+			}
+			rowCopy := make([]float64, len(innerFA.Data))
+			copy(rowCopy, innerFA.Data)
+			rows[i] = rowCopy
+			continue
+		}
 		row, ok := rowObj.(*object.List)
 		if !ok {
-			return nil, errors.NewError("%s: %s must be a list of lists", fnName, paramName)
+			return nil, errors.NewError("%s: %s must be a list of lists or FloatArray", fnName, paramName)
 		}
 		if width == -1 {
 			width = len(row.Elements)
@@ -55,7 +80,37 @@ func toFloatMatrix(obj object.Object, fnName, paramName string) ([][]float64, ob
 	return rows, nil
 }
 
-// floatListToObject converts a Go []float64 into a Scriptling LIST of FLOAT objects.
+func toFloatMatrixZeroCopy(obj object.Object, fnName, paramName string) ([][]float64, bool, object.Object) {
+	if fa, ok := obj.(*object.FloatArray); ok && fa.Is2D() {
+		rows := fa.Rows()
+		cols := fa.Cols()
+		result := make([][]float64, rows)
+		for i := 0; i < rows; i++ {
+			result[i] = fa.Data[i*cols : (i+1)*cols]
+		}
+		return result, true, nil
+	}
+	m, errObj := toFloatMatrix(obj, fnName, paramName)
+	return m, false, errObj
+}
+
+func floatListToFloatArray(vals []float64) object.Object {
+	return object.NewFloatArray1D(vals)
+}
+
+func floatMatrixToFloatArray(m [][]float64) object.Object {
+	if len(m) == 0 {
+		return object.NewFloatArray2D(nil, 0, 0)
+	}
+	rows := len(m)
+	cols := len(m[0])
+	data := make([]float64, 0, rows*cols)
+	for _, r := range m {
+		data = append(data, r...)
+	}
+	return object.NewFloatArray2D(data, rows, cols)
+}
+
 func floatListToObject(vals []float64) object.Object {
 	elems := make([]object.Object, len(vals))
 	for i, v := range vals {
@@ -64,7 +119,6 @@ func floatListToObject(vals []float64) object.Object {
 	return &object.List{Elements: elems}
 }
 
-// floatMatrixToObject converts a Go [][]float64 into a Scriptling LIST of LIST of FLOAT objects.
 func floatMatrixToObject(m [][]float64) object.Object {
 	rows := make([]object.Object, len(m))
 	for i, r := range m {

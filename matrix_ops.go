@@ -7,8 +7,6 @@ import (
 	"github.com/paularlott/scriptling/object"
 )
 
-// fnConcatRows implements llm.concat_rows: concatenate two matrices along the row axis.
-// Both matrices must have the same number of columns.
 func fnConcatRows(ctx context.Context, kwargs object.Kwargs, args ...object.Object) object.Object {
 	if err := errors.ExactArgs(args, 2); err != nil {
 		return err
@@ -22,19 +20,29 @@ func fnConcatRows(ctx context.Context, kwargs object.Kwargs, args ...object.Obje
 		return errObj
 	}
 	if len(a) == 0 && len(b) == 0 {
-		return &object.List{Elements: []object.Object{}}
+		return object.NewFloatArray2D(nil, 0, 0)
 	}
 	if len(a) > 0 && len(b) > 0 && len(a[0]) != len(b[0]) {
 		return errors.NewError("concat_rows: matrices must have the same number of columns")
 	}
-	result := make([][]float64, 0, len(a)+len(b))
-	result = append(result, a...)
-	result = append(result, b...)
-	return floatMatrixToObject(result)
+
+	cols := 0
+	if len(a) > 0 {
+		cols = len(a[0])
+	} else if len(b) > 0 {
+		cols = len(b[0])
+	}
+	rows := len(a) + len(b)
+	data := make([]float64, 0, rows*cols)
+	for _, r := range a {
+		data = append(data, r...)
+	}
+	for _, r := range b {
+		data = append(data, r...)
+	}
+	return object.NewFloatArray2D(data, rows, cols)
 }
 
-// fnSliceRows implements llm.slice_rows: extract rows [start, end) from a matrix.
-// Start and end are clamped to valid bounds. Returns empty list if start >= end.
 func fnSliceRows(ctx context.Context, kwargs object.Kwargs, args ...object.Object) object.Object {
 	if err := errors.ExactArgs(args, 3); err != nil {
 		return err
@@ -58,13 +66,18 @@ func fnSliceRows(ctx context.Context, kwargs object.Kwargs, args ...object.Objec
 	if end > n {
 		end = n
 	}
-	if start >= end {
-		return &object.List{Elements: []object.Object{}}
+	if start >= end || len(rows) == 0 {
+		return object.NewFloatArray2D(nil, 0, 0)
 	}
-	return floatMatrixToObject(rows[start:end])
+	cols := len(rows[0])
+	resultRows := int(end - start)
+	data := make([]float64, 0, resultRows*cols)
+	for i := int(start); i < int(end); i++ {
+		data = append(data, rows[i]...)
+	}
+	return object.NewFloatArray2D(data, resultRows, cols)
 }
 
-// fnFlatten implements llm.flatten: flatten a 2D matrix into a 1D list in row-major order.
 func fnFlatten(ctx context.Context, kwargs object.Kwargs, args ...object.Object) object.Object {
 	if err := errors.ExactArgs(args, 1); err != nil {
 		return err
@@ -81,5 +94,106 @@ func fnFlatten(ctx context.Context, kwargs object.Kwargs, args ...object.Object)
 	for _, r := range rows {
 		result = append(result, r...)
 	}
-	return floatListToObject(result)
+	return object.NewFloatArray1D(result)
+}
+
+func fnReshape(ctx context.Context, kwargs object.Kwargs, args ...object.Object) object.Object {
+	if err := errors.ExactArgs(args, 3); err != nil {
+		return err
+	}
+	data, errObj := toFloatList(args[0], "reshape", "data")
+	if errObj != nil {
+		return errObj
+	}
+	rows, err := args[1].AsInt()
+	if err != nil {
+		return errors.NewTypeError("INTEGER", args[1].Type().String())
+	}
+	cols, err := args[2].AsInt()
+	if err != nil {
+		return errors.NewTypeError("INTEGER", args[2].Type().String())
+	}
+	if int(rows)*int(cols) != len(data) {
+		return errors.NewError("reshape: data length (%d) must equal rows*cols (%d*%d=%d)", len(data), rows, cols, int(rows)*int(cols))
+	}
+	return object.NewFloatArray2D(data, int(rows), int(cols))
+}
+
+func fnZeros(ctx context.Context, kwargs object.Kwargs, args ...object.Object) object.Object {
+	if err := errors.RangeArgs(args, 1, 2); err != nil {
+		return err
+	}
+	if len(args) == 1 {
+		n, err := args[0].AsInt()
+		if err != nil {
+			return errors.NewTypeError("INTEGER", args[0].Type().String())
+		}
+		return object.NewFloatArray1D(make([]float64, n))
+	}
+	rows, err := args[0].AsInt()
+	if err != nil {
+		return errors.NewTypeError("INTEGER", args[0].Type().String())
+	}
+	cols, err := args[1].AsInt()
+	if err != nil {
+		return errors.NewTypeError("INTEGER", args[1].Type().String())
+	}
+	return object.NewFloatArray2D(make([]float64, int(rows)*int(cols)), int(rows), int(cols))
+}
+
+func fnArange(ctx context.Context, kwargs object.Kwargs, args ...object.Object) object.Object {
+	if err := errors.RangeArgs(args, 1, 3); err != nil {
+		return err
+	}
+	var start, stop, step float64
+	switch len(args) {
+	case 1:
+		start = 0
+		s, err := args[0].AsFloat()
+		if err != nil {
+			return errors.NewTypeError("INTEGER or FLOAT", args[0].Type().String())
+		}
+		stop = s
+		step = 1
+	case 2:
+		s, err := args[0].AsFloat()
+		if err != nil {
+			return errors.NewTypeError("INTEGER or FLOAT", args[0].Type().String())
+		}
+		start = s
+		s2, err := args[1].AsFloat()
+		if err != nil {
+			return errors.NewTypeError("INTEGER or FLOAT", args[1].Type().String())
+		}
+		stop = s2
+		step = 1
+	case 3:
+		s, err := args[0].AsFloat()
+		if err != nil {
+			return errors.NewTypeError("INTEGER or FLOAT", args[0].Type().String())
+		}
+		start = s
+		s2, err := args[1].AsFloat()
+		if err != nil {
+			return errors.NewTypeError("INTEGER or FLOAT", args[1].Type().String())
+		}
+		stop = s2
+		s3, err := args[2].AsFloat()
+		if err != nil {
+			return errors.NewTypeError("INTEGER or FLOAT", args[2].Type().String())
+		}
+		step = s3
+	}
+	if step == 0 {
+		return errors.NewError("arange: step must not be zero")
+	}
+	n := int((stop - start) / step)
+	if n < 0 {
+		n = 0
+	}
+	data := make([]float64, n)
+	for i := 0; i < n; i++ {
+		data[i] = start + float64(i)*step
+	}
+	return object.NewFloatArray1D(data)
 }

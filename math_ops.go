@@ -9,7 +9,6 @@ import (
 	"github.com/paularlott/scriptling/object"
 )
 
-// fnArgmax implements llm.argmax: returns the index of the maximum value.
 func fnArgmax(ctx context.Context, kwargs object.Kwargs, args ...object.Object) object.Object {
 	if err := errors.ExactArgs(args, 1); err != nil {
 		return err
@@ -32,7 +31,6 @@ func fnArgmax(ctx context.Context, kwargs object.Kwargs, args ...object.Object) 
 	return object.NewInteger(int64(bestIdx))
 }
 
-// fnArgmin implements llm.argmin: returns the index of the minimum value.
 func fnArgmin(ctx context.Context, kwargs object.Kwargs, args ...object.Object) object.Object {
 	if err := errors.ExactArgs(args, 1); err != nil {
 		return err
@@ -55,14 +53,11 @@ func fnArgmin(ctx context.Context, kwargs object.Kwargs, args ...object.Object) 
 	return object.NewInteger(int64(bestIdx))
 }
 
-// indexedVal pairs an element index with its float value for sorting.
 type indexedVal struct {
 	index int
 	value float64
 }
 
-// fnTopk implements llm.topk: returns the top k (index, value) pairs sorted descending.
-// Uses a full sort of indexed values.
 func fnTopk(ctx context.Context, kwargs object.Kwargs, args ...object.Object) object.Object {
 	if err := errors.ExactArgs(args, 2); err != nil {
 		return err
@@ -101,8 +96,6 @@ func fnTopk(ctx context.Context, kwargs object.Kwargs, args ...object.Object) ob
 	return &object.List{Elements: result}
 }
 
-// fnClip implements llm.clip: clamps values to [lo, hi].
-// Accepts either a scalar (returns scalar) or a list (returns list).
 func fnClip(ctx context.Context, kwargs object.Kwargs, args ...object.Object) object.Object {
 	if err := errors.ExactArgs(args, 3); err != nil {
 		return err
@@ -120,15 +113,34 @@ func fnClip(ctx context.Context, kwargs object.Kwargs, args ...object.Object) ob
 		if lo > hi {
 			return errors.NewError("clip: lo must be <= hi")
 		}
-		elems := make([]object.Object, len(list.Elements))
+		result := make([]float64, len(list.Elements))
 		for i, el := range list.Elements {
 			v, err := el.AsFloat()
 			if err != nil {
 				return errors.NewTypeError("INTEGER or FLOAT", el.Type().String())
 			}
-			elems[i] = &object.Float{Value: math.Max(lo, math.Min(hi, v))}
+			result[i] = math.Max(lo, math.Min(hi, v))
 		}
-		return &object.List{Elements: elems}
+		return object.NewFloatArray1D(result)
+	}
+
+	if fa, ok := args[0].(*object.FloatArray); ok && !fa.Is2D() {
+		lo, err := args[1].AsFloat()
+		if err != nil {
+			return errors.NewTypeError("INTEGER or FLOAT", args[1].Type().String())
+		}
+		hi, err := args[2].AsFloat()
+		if err != nil {
+			return errors.NewTypeError("INTEGER or FLOAT", args[2].Type().String())
+		}
+		if lo > hi {
+			return errors.NewError("clip: lo must be <= hi")
+		}
+		result := make([]float64, len(fa.Data))
+		for i, v := range fa.Data {
+			result[i] = math.Max(lo, math.Min(hi, v))
+		}
+		return object.NewFloatArray1D(result)
 	}
 
 	x, err := args[0].AsFloat()

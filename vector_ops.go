@@ -7,7 +7,6 @@ import (
 	"github.com/paularlott/scriptling/object"
 )
 
-// fnVecAdd implements llm.vec_add: element-wise vector addition.
 func fnVecAdd(ctx context.Context, kwargs object.Kwargs, args ...object.Object) object.Object {
 	if err := errors.ExactArgs(args, 2); err != nil {
 		return err
@@ -27,10 +26,9 @@ func fnVecAdd(ctx context.Context, kwargs object.Kwargs, args ...object.Object) 
 	for i := range a {
 		result[i] = a[i] + b[i]
 	}
-	return floatListToObject(result)
+	return object.NewFloatArray1D(result)
 }
 
-// fnVecSub implements llm.vec_sub: element-wise vector subtraction.
 func fnVecSub(ctx context.Context, kwargs object.Kwargs, args ...object.Object) object.Object {
 	if err := errors.ExactArgs(args, 2); err != nil {
 		return err
@@ -50,10 +48,9 @@ func fnVecSub(ctx context.Context, kwargs object.Kwargs, args ...object.Object) 
 	for i := range a {
 		result[i] = a[i] - b[i]
 	}
-	return floatListToObject(result)
+	return object.NewFloatArray1D(result)
 }
 
-// fnVecMul implements llm.vec_mul: element-wise vector multiplication.
 func fnVecMul(ctx context.Context, kwargs object.Kwargs, args ...object.Object) object.Object {
 	if err := errors.ExactArgs(args, 2); err != nil {
 		return err
@@ -73,10 +70,9 @@ func fnVecMul(ctx context.Context, kwargs object.Kwargs, args ...object.Object) 
 	for i := range a {
 		result[i] = a[i] * b[i]
 	}
-	return floatListToObject(result)
+	return object.NewFloatArray1D(result)
 }
 
-// fnVecScale implements llm.vec_scale: multiply every vector element by a scalar.
 func fnVecScale(ctx context.Context, kwargs object.Kwargs, args ...object.Object) object.Object {
 	if err := errors.ExactArgs(args, 2); err != nil {
 		return err
@@ -93,12 +89,9 @@ func fnVecScale(ctx context.Context, kwargs object.Kwargs, args ...object.Object
 	for i := range a {
 		result[i] = a[i] * s
 	}
-	return floatListToObject(result)
+	return object.NewFloatArray1D(result)
 }
 
-// fnVecApply implements llm.vec_apply: apply a named activation function element-wise.
-// fn_name must be one of "sigmoid", "relu", "gelu", "silu".
-// Dispatches to the Go implementation directly, avoiding per-element callback overhead.
 func fnVecApply(ctx context.Context, kwargs object.Kwargs, args ...object.Object) object.Object {
 	if err := errors.ExactArgs(args, 2); err != nil {
 		return err
@@ -130,5 +123,5 @@ func fnVecApply(ctx context.Context, kwargs object.Kwargs, args ...object.Object
 	for i, v := range vals {
 		result[i] = fn(v)
 	}
-	return floatListToObject(result)
+	return object.NewFloatArray1D(result)
 }
