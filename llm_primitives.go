@@ -90,27 +90,47 @@ func fnRope(ctx context.Context, kwargs object.Kwargs, args ...object.Object) ob
 		startPos = sp
 	}
 
-	if xData, xRows, xCols, ok := object.GetFloatMatrix(args[0]); ok {
-		if xRows == 0 {
-			return object.NewFloatArray2D(nil, 0, 0)
+	freqBase := 10000.0
+	if kwargs.Has("freq_base") {
+		freqBase = kwargs.MustGetFloat("freq_base", 10000.0)
+	}
+	ropeDim := 0
+	if kwargs.Has("rope_dim") {
+		ropeDim = int(kwargs.MustGetInt("rope_dim", 0))
+	}
+
+	applyRope := func(xData []float64, xRows, xCols int) []float64 {
+		effectiveDim := xCols
+		if ropeDim > 0 && ropeDim < xCols {
+			effectiveDim = ropeDim
 		}
-		if xCols%2 != 0 {
-			return errors.NewError("rope: last dimension must be even (got %d)", xCols)
-		}
-		halfDim := xCols / 2
+		halfDim := effectiveDim / 2
 		data := make([]float64, 0, xRows*xCols)
 		for seqIdx := 0; seqIdx < xRows; seqIdx++ {
 			pos := float64(startPos) + float64(seqIdx)
 			off := seqIdx * xCols
 			for i := 0; i < halfDim; i++ {
-				freq := 1.0 / math.Pow(10000.0, 2.0*float64(i)/float64(xCols))
+				freq := 1.0 / math.Pow(freqBase, 2.0*float64(i)/float64(effectiveDim))
 				angle := freq * pos
 				cosA := math.Cos(angle)
 				sinA := math.Sin(angle)
 				data = append(data, xData[off+2*i]*cosA-xData[off+2*i+1]*sinA)
 				data = append(data, xData[off+2*i]*sinA+xData[off+2*i+1]*cosA)
 			}
+			if effectiveDim < xCols {
+				for i := effectiveDim; i < xCols; i++ {
+					data = append(data, xData[off+i])
+				}
+			}
 		}
+		return data
+	}
+
+	if xData, xRows, xCols, ok := object.GetFloatMatrix(args[0]); ok {
+		if xRows == 0 {
+			return object.NewFloatArray2D(nil, 0, 0)
+		}
+		data := applyRope(xData, xRows, xCols)
 		return object.NewFloatArray2D(data, xRows, xCols)
 	}
 
@@ -122,24 +142,13 @@ func fnRope(ctx context.Context, kwargs object.Kwargs, args ...object.Object) ob
 		return object.NewFloatArray2D(nil, 0, 0)
 	}
 	dk := len(x[0])
-	if dk%2 != 0 {
-		return errors.NewError("rope: last dimension must be even (got %d)", dk)
-	}
-	halfDim := dk / 2
 	seqLen := len(x)
-	data := make([]float64, 0, seqLen*dk)
 
-	for seqIdx, row := range x {
-		pos := float64(startPos) + float64(seqIdx)
-		for i := 0; i < halfDim; i++ {
-			freq := 1.0 / math.Pow(10000.0, 2.0*float64(i)/float64(dk))
-			angle := freq * pos
-			cosA := math.Cos(angle)
-			sinA := math.Sin(angle)
-			data = append(data, row[2*i]*cosA-row[2*i+1]*sinA)
-			data = append(data, row[2*i]*sinA+row[2*i+1]*cosA)
-		}
+	flatData := make([]float64, 0, seqLen*dk)
+	for _, row := range x {
+		flatData = append(flatData, row...)
 	}
+	data := applyRope(flatData, seqLen, dk)
 	return object.NewFloatArray2D(data, seqLen, dk)
 }
 

@@ -265,16 +265,16 @@ Example:
 			HelpText: `linear_row(x, weight, bias=None) - Last-row-only linear`,
 		},
 		"linear_q8": {
-			Fn: fnLinearQ8,
-			HelpText: `linear_q8(x, raw, groups_per_row) - Quantized Q8_0 matmul`,
+			Fn: fnLinearQ8Fast,
+			HelpText: `linear_q8(x, raw, groups_per_row) - Quantized Q8_0 matmul (fast)`,
 		},
 		"linear_row_q8": {
-			Fn: fnLinearRowQ8,
-			HelpText: `linear_row_q8(x, raw, groups_per_row) - Last-row-only Q8_0 matmul`,
+			Fn: fnLinearRowQ8Fast,
+			HelpText: `linear_row_q8(x, raw, groups_per_row) - Last-row-only Q8_0 matmul (fast)`,
 		},
 		"linear_q4": {
-			Fn: fnLinearQ4,
-			HelpText: `linear_q4(x, raw, groups_per_row) - Quantized Q4_0 matmul
+			Fn: fnLinearQ4Fast,
+			HelpText: `linear_q4(x, raw, groups_per_row) - Quantized Q4_0 matmul (fast)
 
 Parameters:
   x              - input matrix (seq_len, in_features)
@@ -285,8 +285,8 @@ Returns:
   Matrix (seq_len, out_features).`,
 		},
 		"linear_row_q4": {
-			Fn: fnLinearRowQ4,
-			HelpText: `linear_row_q4(x, raw, groups_per_row) - Last-row-only Q4_0 matmul
+			Fn: fnLinearRowQ4Fast,
+			HelpText: `linear_row_q4(x, raw, groups_per_row) - Last-row-only Q4_0 matmul (fast)
 
 Parameters:
   x              - input matrix (seq_len, in_features)
