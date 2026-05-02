@@ -389,10 +389,13 @@ func fnLinear(ctx context.Context, kwargs object.Kwargs, args ...object.Object) 
 		if wCols != xCols {
 			return errors.NewError("linear: weight columns (%d) must match x columns (%d)", wCols, xCols)
 		}
-		data := make([]float64, 0, xRows*wRows)
-		for xi := 0; xi < xRows; xi++ {
-			xOff := xi * xCols
-			for j := 0; j < wRows; j++ {
+		data := make([]float64, xRows*wRows)
+		total := xRows * wRows
+		parallelFor(total, func(start, end int) {
+			for idx := start; idx < end; idx++ {
+				xi := idx / wRows
+				j := idx % wRows
+				xOff := xi * xCols
 				wOff := j * wCols
 				var sum float64
 				for l := 0; l < xCols; l++ {
@@ -401,9 +404,9 @@ func fnLinear(ctx context.Context, kwargs object.Kwargs, args ...object.Object) 
 				if bias != nil {
 					sum += bias[j]
 				}
-				data = append(data, sum)
+				data[xi*wRows+j] = sum
 			}
-		}
+		})
 		return object.NewFloatArray2D(data, xRows, wRows)
 	}
 
@@ -481,17 +484,19 @@ func fnLinearRow(ctx context.Context, kwargs object.Kwargs, args ...object.Objec
 		}
 		lastOff := (xRows - 1) * xCols
 		result := make([]float64, wRows)
-		for j := 0; j < wRows; j++ {
-			wOff := j * wCols
-			var sum float64
-			for l := 0; l < xCols; l++ {
-				sum += xData[lastOff+l] * wData[wOff+l]
+		parallelFor(wRows, func(start, end int) {
+			for j := start; j < end; j++ {
+				wOff := j * wCols
+				var sum float64
+				for l := 0; l < xCols; l++ {
+					sum += xData[lastOff+l] * wData[wOff+l]
+				}
+				if bias != nil {
+					sum += bias[j]
+				}
+				result[j] = sum
 			}
-			if bias != nil {
-				sum += bias[j]
-			}
-			result[j] = sum
-		}
+		})
 		return object.NewFloatArray1D(result)
 	}
 

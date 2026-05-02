@@ -274,27 +274,19 @@ Example:
 		},
 		"linear_q4": {
 			Fn: fnLinearQ4Fast,
-			HelpText: `linear_q4(x, raw, groups_per_row) - Quantized Q4_0 matmul (fast)
-
-Parameters:
-  x              - input matrix (seq_len, in_features)
-  raw            - string of raw Q4_0 block bytes (out_features * groups_per_row * 18 bytes)
-  groups_per_row - number of Q4_0 groups per weight row (in_features / 32)
-
-Returns:
-  Matrix (seq_len, out_features).`,
+			HelpText: `linear_q4(x, raw, groups_per_row) - Quantized Q4_0 matmul (fast)`,
 		},
 		"linear_row_q4": {
 			Fn: fnLinearRowQ4Fast,
-			HelpText: `linear_row_q4(x, raw, groups_per_row) - Last-row-only Q4_0 matmul (fast)
-
-Parameters:
-  x              - input matrix (seq_len, in_features)
-  raw            - string of raw Q4_0 block bytes
-  groups_per_row - number of Q4_0 groups per weight row (in_features / 32)
-
-Returns:
-  Vector (out_features,).`,
+			HelpText: `linear_row_q4(x, raw, groups_per_row) - Last-row-only Q4_0 matmul (fast)`,
+		},
+		"linear_q5": {
+			Fn: fnLinearQ5Fast,
+			HelpText: `linear_q5(x, raw, groups_per_row) - Quantized Q5_0 matmul (fast)`,
+		},
+		"linear_row_q5": {
+			Fn: fnLinearRowQ5Fast,
+			HelpText: `linear_row_q5(x, raw, groups_per_row) - Last-row-only Q5_0 matmul (fast)`,
 		},
 		"top_k": {
 			Fn: fnTopK,
@@ -311,6 +303,10 @@ Returns:
 		"dequantize_q4_0": {
 			Fn: fnDequantizeQ4_0,
 			HelpText: `dequantize_q4_0(raw, n_groups) - Native GGUF Q4_0 block dequantization`,
+		},
+		"dequantize_q5_0": {
+			Fn: fnDequantizeQ5_0,
+			HelpText: `dequantize_q5_0(raw, n_groups) - Native GGUF Q5_0 block dequantization`,
 		},
 		"linear_q4_k": {
 			Fn: fnLinearQ4K,
@@ -335,6 +331,10 @@ Returns:
 		"dequantize_q6_k": {
 			Fn: fnDequantizeQ6K,
 			HelpText: `dequantize_q6_k(raw, n_blocks) - Native GGUF Q6_K block dequantization`,
+		},
+		"output_logits": {
+			Fn: fnOutputLogits,
+			HelpText: `output_logits(x, norm_weight, output_weight) - Fused RMS norm + output projection`,
 		},
 		"sample": {
 			Fn: fnSample,

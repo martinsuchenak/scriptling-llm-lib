@@ -184,16 +184,18 @@ func fnLinearRowQ6K(ctx context.Context, kwargs object.Kwargs, args ...object.Ob
 		}
 		lastOff := (xRows - 1) * xCols
 		result := make([]float64, outFeatures)
-		for j := 0; j < outFeatures; j++ {
-			rowRawOff := j * rowBytes
-			var sum float64
-			for g := 0; g < groupsPerRow; g++ {
-				blkOff := rowRawOff + g*q6kBlockSize
-				xOff := lastOff + g*elementsPerBlock
-				sum += q6kDotBlock(rawBytes, blkOff, xData, xOff)
+		parallelFor(outFeatures, func(start, end int) {
+			for j := start; j < end; j++ {
+				rowRawOff := j * rowBytes
+				var sum float64
+				for g := 0; g < groupsPerRow; g++ {
+					blkOff := rowRawOff + g*q6kBlockSize
+					xOff := lastOff + g*elementsPerBlock
+					sum += q6kDotBlock(rawBytes, blkOff, xData, xOff)
+				}
+				result[j] = sum
 			}
-			result[j] = sum
-		}
+		})
 		return object.NewFloatArray1D(result)
 	}
 
@@ -210,16 +212,18 @@ func fnLinearRowQ6K(ctx context.Context, kwargs object.Kwargs, args ...object.Ob
 	}
 
 	result := make([]float64, outFeatures)
-	for j := 0; j < outFeatures; j++ {
-		rowRawOff := j * rowBytes
-		var sum float64
-		for g := 0; g < groupsPerRow; g++ {
-			blkOff := rowRawOff + g*q6kBlockSize
-			xOff := g * elementsPerBlock
-			sum += q6kDotBlock(rawBytes, blkOff, lastRow, xOff)
+	parallelFor(outFeatures, func(start, end int) {
+		for j := start; j < end; j++ {
+			rowRawOff := j * rowBytes
+			var sum float64
+			for g := 0; g < groupsPerRow; g++ {
+				blkOff := rowRawOff + g*q6kBlockSize
+				xOff := g * elementsPerBlock
+				sum += q6kDotBlock(rawBytes, blkOff, lastRow, xOff)
+			}
+			result[j] = sum
 		}
-		result[j] = sum
-	}
+	})
 	return object.NewFloatArray1D(result)
 }
 

@@ -55,21 +55,24 @@ func fnLinearQ4K(ctx context.Context, kwargs object.Kwargs, args ...object.Objec
 		if xCols != inFeatures {
 			return errors.NewError("linear_q4_k: x columns (%d) must match in_features (%d)", xCols, inFeatures)
 		}
-		data := make([]float64, 0, xRows*outFeatures)
-		for xi := 0; xi < xRows; xi++ {
-			xRowOff := xi * xCols
-			for j := 0; j < outFeatures; j++ {
+		total := xRows * outFeatures
+		dataSlice := make([]float64, total)
+		parallelFor(total, func(start, end int) {
+			for idx := start; idx < end; idx++ {
+				xi := idx / outFeatures
+				j := idx % outFeatures
+				xRowOff := xi * xCols
 				rowRawOff := j * rowBytes
 				var sum float64
 				for g := 0; g < groupsPerRow; g++ {
 					blkOff := rowRawOff + g*blockSize
 					xOff := xRowOff + g*elementsPerBlock
-					sum += q4kDotBlock(rawBytes, blkOff, xData, xOff)
+					sum += q4kDotBlockFast(rawBytes, blkOff, xData, xOff)
 				}
-				data = append(data, sum)
+				dataSlice[xi*outFeatures+j] = sum
 			}
-		}
-		return object.NewFloatArray2D(data, xRows, outFeatures)
+		})
+		return object.NewFloatArray2D(dataSlice, xRows, outFeatures)
 	}
 
 	xMat, errObj := toFloatMatrix(args[0], "linear_q4_k", "x")
@@ -90,7 +93,7 @@ func fnLinearQ4K(ctx context.Context, kwargs object.Kwargs, args ...object.Objec
 			for g := 0; g < groupsPerRow; g++ {
 				blkOff := rowRawOff + g*blockSize
 				xOff := g * elementsPerBlock
-				sum += q4kDotBlockSlow(rawBytes, blkOff, xRow, xOff)
+				sum += q4kDotBlockFast(rawBytes, blkOff, xRow, xOff)
 			}
 			data = append(data, sum)
 		}
@@ -129,16 +132,18 @@ func fnLinearRowQ4K(ctx context.Context, kwargs object.Kwargs, args ...object.Ob
 		}
 		lastOff := (xRows - 1) * xCols
 		result := make([]float64, outFeatures)
-		for j := 0; j < outFeatures; j++ {
-			rowRawOff := j * rowBytes
-			var sum float64
-			for g := 0; g < groupsPerRow; g++ {
-				blkOff := rowRawOff + g*blockSize
-				xOff := lastOff + g*elementsPerBlock
-				sum += q4kDotBlock(rawBytes, blkOff, xData, xOff)
+		parallelFor(outFeatures, func(start, end int) {
+			for j := start; j < end; j++ {
+				rowRawOff := j * rowBytes
+				var sum float64
+				for g := 0; g < groupsPerRow; g++ {
+					blkOff := rowRawOff + g*blockSize
+					xOff := lastOff + g*elementsPerBlock
+					sum += q4kDotBlockFast(rawBytes, blkOff, xData, xOff)
+				}
+				result[j] = sum
 			}
-			result[j] = sum
-		}
+		})
 		return object.NewFloatArray1D(result)
 	}
 
@@ -155,16 +160,18 @@ func fnLinearRowQ4K(ctx context.Context, kwargs object.Kwargs, args ...object.Ob
 	}
 
 	result := make([]float64, outFeatures)
-	for j := 0; j < outFeatures; j++ {
-		rowRawOff := j * rowBytes
-		var sum float64
-		for g := 0; g < groupsPerRow; g++ {
-			blkOff := rowRawOff + g*blockSize
-			xOff := g * elementsPerBlock
-			sum += q4kDotBlockSlow(rawBytes, blkOff, lastRow, xOff)
+	parallelFor(outFeatures, func(start, end int) {
+		for j := start; j < end; j++ {
+			rowRawOff := j * rowBytes
+			var sum float64
+			for g := 0; g < groupsPerRow; g++ {
+				blkOff := rowRawOff + g*blockSize
+				xOff := g * elementsPerBlock
+				sum += q4kDotBlockFast(rawBytes, blkOff, lastRow, xOff)
+			}
+			result[j] = sum
 		}
-		result[j] = sum
-	}
+	})
 	return object.NewFloatArray1D(result)
 }
 
@@ -219,7 +226,7 @@ func q4kDotBlock(raw []byte, blkOff int, x []float64, xOff int) float64 {
 }
 
 func q4kDotBlockSlow(raw []byte, blkOff int, x []float64, xOff int) float64 {
-	return q4kDotBlock(raw, blkOff, x, xOff)
+	return q4kDotBlockFast(raw, blkOff, x, xOff)
 }
 
 func fnDequantizeQ4K(ctx context.Context, kwargs object.Kwargs, args ...object.Object) object.Object {

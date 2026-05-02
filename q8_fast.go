@@ -226,14 +226,16 @@ func fnLinearRowQ8Fast(ctx context.Context, kwargs object.Kwargs, args ...object
 		}
 		lastOff := (xRows - 1) * xCols
 		result := make([]float64, outFeatures)
-		for j := 0; j < outFeatures; j++ {
-			rowRawOff := j * rowBytes
-			var sum float64
-			for g := 0; g < groupsPerRow; g++ {
-				sum += q8DotGroupX(rawBytes, rowRawOff+g*34, xData, lastOff+g*32)
+		parallelFor(outFeatures, func(start, end int) {
+			for j := start; j < end; j++ {
+				rowRawOff := j * rowBytes
+				var sum float64
+				for g := 0; g < groupsPerRow; g++ {
+					sum += q8DotGroupX(rawBytes, rowRawOff+g*34, xData, lastOff+g*32)
+				}
+				result[j] = sum
 			}
-			result[j] = sum
-		}
+		})
 		return object.NewFloatArray1D(result)
 	}
 
@@ -250,14 +252,16 @@ func fnLinearRowQ8Fast(ctx context.Context, kwargs object.Kwargs, args ...object
 	}
 
 	result := make([]float64, outFeatures)
-	for j := 0; j < outFeatures; j++ {
-		rowRawOff := j * rowBytes
-		var sum float64
-		for g := 0; g < groupsPerRow; g++ {
-			sum += q8DotGroup(rawBytes, rowRawOff+g*34, lastRow, g*32)
+	parallelFor(outFeatures, func(start, end int) {
+		for j := start; j < end; j++ {
+			rowRawOff := j * rowBytes
+			var sum float64
+			for g := 0; g < groupsPerRow; g++ {
+				sum += q8DotGroup(rawBytes, rowRawOff+g*34, lastRow, g*32)
+			}
+			result[j] = sum
 		}
-		result[j] = sum
-	}
+	})
 	return object.NewFloatArray1D(result)
 }
 
@@ -360,14 +364,16 @@ func fnLinearRowQ4Fast(ctx context.Context, kwargs object.Kwargs, args ...object
 		}
 		lastOff := (xRows - 1) * xCols
 		result := make([]float64, outFeatures)
-		for j := 0; j < outFeatures; j++ {
-			wRawOff := j * rowBytes
-			var sum float64
-			for g := 0; g < groupsPerRow; g++ {
-				sum += q4DotGroupX(rawBytes, wRawOff+g*18, xData, lastOff+g*32)
+		parallelFor(outFeatures, func(start, end int) {
+			for j := start; j < end; j++ {
+				wRawOff := j * rowBytes
+				var sum float64
+				for g := 0; g < groupsPerRow; g++ {
+					sum += q4DotGroupX(rawBytes, wRawOff+g*18, xData, lastOff+g*32)
+				}
+				result[j] = sum
 			}
-			result[j] = sum
-		}
+		})
 		return object.NewFloatArray1D(result)
 	}
 
@@ -384,13 +390,15 @@ func fnLinearRowQ4Fast(ctx context.Context, kwargs object.Kwargs, args ...object
 	}
 
 	result := make([]float64, outFeatures)
-	for j := 0; j < outFeatures; j++ {
-		wRawOff := j * rowBytes
-		var sum float64
-		for g := 0; g < groupsPerRow; g++ {
-			sum += q4DotGroup(rawBytes, wRawOff+g*18, lastRow, g*32)
+	parallelFor(outFeatures, func(start, end int) {
+		for j := start; j < end; j++ {
+			wRawOff := j * rowBytes
+			var sum float64
+			for g := 0; g < groupsPerRow; g++ {
+				sum += q4DotGroup(rawBytes, wRawOff+g*18, lastRow, g*32)
+			}
+			result[j] = sum
 		}
-		result[j] = sum
-	}
+	})
 	return object.NewFloatArray1D(result)
 }
