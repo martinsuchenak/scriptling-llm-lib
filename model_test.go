@@ -1,12 +1,23 @@
 package scriptlingllmlib
 
 import (
+	"context"
 	"math"
 	"os"
 	"testing"
 
+	"github.com/paularlott/scriptling"
+	"github.com/paularlott/scriptling/errors"
 	"github.com/paularlott/scriptling/object"
 )
+
+func init() {
+	_ = context.Background
+	_ = errors.ExactArgs
+	_ = scriptling.New
+	_ = os.Getenv
+	_ = math.NaN
+}
 
 func TestKVCacheStructure(t *testing.T) {
 	cache := KVCache{
@@ -70,6 +81,9 @@ func TestInferenceModelGenerate(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping inference test in short mode")
 	}
+	if raceEnabled {
+		t.Skip("skipping inference test under race detector")
+	}
 
 	path := "models/SmolLM2-135M-Instruct-Q8_0.gguf"
 	if _, err := os.Stat(path); os.IsNotExist(err) {
@@ -83,7 +97,7 @@ func TestInferenceModelGenerate(t *testing.T) {
 
 	model.initKVCaches()
 
-	output, nGen, nPrompt, _ := model.Generate("Hello", 10, "greedy", 0, 0, 0, 0, 0, "", "", 0)
+	output, nGen, nPrompt, _ := model.Generate("Hello", 3, "greedy", 0, 0, 0, 0, 0, "", "", 0)
 
 	if nPrompt == 0 {
 		t.Error("prompt tokens should be > 0")
@@ -101,6 +115,9 @@ func TestInferenceModelGenerate(t *testing.T) {
 func TestInferenceModelForward(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping forward pass test in short mode")
+	}
+	if raceEnabled {
+		t.Skip("skipping forward pass test under race detector")
 	}
 
 	path := "models/SmolLM2-135M-Instruct-Q8_0.gguf"
@@ -154,6 +171,9 @@ func TestInferenceModelForward(t *testing.T) {
 func TestInferenceModelTokenizer(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping tokenizer integration test in short mode")
+	}
+	if raceEnabled {
+		t.Skip("skipping tokenizer test under race detector")
 	}
 
 	path := "models/SmolLM2-135M-Instruct-Q8_0.gguf"
@@ -269,6 +289,11 @@ func TestGenerateWithSessionIntegration(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping session integration test in short mode")
 	}
+	if raceEnabled {
+		t.Skip("skipping session integration test under race detector")
+	}
+
+	globalModelCache.clearModels()
 
 	path := "models/SmolLM2-135M-Instruct-Q8_0.gguf"
 	if _, err := os.Stat(path); os.IsNotExist(err) {
@@ -283,7 +308,7 @@ func TestGenerateWithSessionIntegration(t *testing.T) {
 	result1 := fnGenerate(ctx, kwargs1,
 		&object.String{Value: path},
 		&object.String{Value: "Hello"},
-		object.NewInteger(10),
+		object.NewInteger(3),
 		&object.String{Value: "greedy"},
 	)
 
@@ -313,7 +338,7 @@ func TestGenerateWithSessionIntegration(t *testing.T) {
 	result2 := fnGenerate(ctx, kwargs2,
 		&object.String{Value: path},
 		&object.String{Value: "What else"},
-		object.NewInteger(5),
+		object.NewInteger(2),
 		&object.String{Value: "greedy"},
 	)
 

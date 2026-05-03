@@ -114,6 +114,13 @@ func loadOptional1D(gguf *GGUFModel, name string) []float64 {
 	return f
 }
 
+func (c *modelCache) clearModels() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.models = make(map[string]*InferenceModel)
+	c.sessions = make(map[string]map[string]*sessionEntry)
+}
+
 func (c *modelCache) getSession(modelPath, sessionID string) *sessionEntry {
 	sessions, ok := c.sessions[modelPath]
 	if !ok {

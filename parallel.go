@@ -5,7 +5,14 @@ import (
 	"sync"
 )
 
-var nWorkers = runtime.NumCPU()
+var nWorkers int
+
+func init() {
+	nWorkers = runtime.NumCPU()
+	if nWorkers > 4 {
+		nWorkers = 4
+	}
+}
 
 func parallelFor(n int, fn func(start, end int)) {
 	if n <= 256 || nWorkers <= 1 {
