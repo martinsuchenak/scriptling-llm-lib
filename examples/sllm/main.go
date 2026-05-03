@@ -44,7 +44,6 @@ func main() {
 	}
 
 	p := scriptling.New()
-	p.EnableOutputCapture()
 	stdlib.RegisterAll(p)
 	p.RegisterLibrary(scriptlingllmlib.Library)
 
@@ -55,7 +54,6 @@ func main() {
 
 	if eval != "" {
 		result, err := p.Eval(eval)
-		printOutput(p)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)
@@ -77,7 +75,7 @@ func main() {
 
 	filename := args[0]
 	scriptArgs := append([]string{filename}, args[1:]...)
-	extlibs.RegisterSysLibrary(p, scriptArgs, nil)
+	extlibs.RegisterSysLibrary(p, scriptArgs, os.Stdin)
 	if _, err := os.Stat(filename); os.IsNotExist(err) {
 		fmt.Fprintf(os.Stderr, "Error: file not found: %s\n", filename)
 		os.Exit(2)
@@ -97,16 +95,8 @@ func main() {
 	}
 
 	_, err := p.EvalFile(filename)
-	printOutput(p)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
-	}
-}
-
-func printOutput(p *scriptling.Scriptling) {
-	output := p.GetOutput()
-	if output != "" {
-		fmt.Print(output)
 	}
 }

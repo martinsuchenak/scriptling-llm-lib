@@ -16,7 +16,7 @@ The library is a single Go package (`scriptlingllmlib`) with these logical group
 
 | Area | Files | Description |
 |------|-------|-------------|
-| **Library registration** | `llm.go` | Registers 50+ functions as the `llm` Scriptling library |
+| **Library registration** | `llm.go` | Registers 55+ functions as the `llm` Scriptling library |
 | **Model loading** | `gguf.go` | GGUF v3 parser — F32, F16, Q4_0, Q4_1, Q5_0, Q8_0, Q4_K, Q6_K |
 | **Inference model** | `model.go` | Transformer forward pass, KV cache, autoregressive generation |
 | **Tokenizer** | `tokenizer.go` | BPE tokenizer with sentencepiece + GPT-2 byte-fallback |
@@ -51,7 +51,8 @@ All functions are available via `import llm` in Scriptling.
 
 ### Text Generation
 
-- `llm.generate(model, prompt, max_tokens, strategy, ...)` — End-to-end generation from GGUF files. Supports `temperature`, `top_k`, `top_p`, `repeat_penalty`, `system_prompt`, `template`, `stats` kwargs.
+- `llm.generate(model, prompt, max_tokens, strategy, ...)` — End-to-end generation from GGUF files. Supports `temperature`, `top_k`, `top_p`, `repeat_penalty`, `system_prompt`, `template`, `stats`, `session` kwargs.
+- `llm.clear_session(model, session_id)` — Clear a cached session's KV cache.
 
 ### Linear Algebra
 
@@ -116,3 +117,23 @@ Benchmarks on Apple M2 Max, greedy decoding, 40 generated tokens:
 - `examples/basic/` — Minimal Go program calling LLM primitives
 - `examples/sllm/` — Full Scriptling CLI runtime (the `sllm` binary)
 - `examples/generate/` — Text generation script for `sllm`
+- `examples/session/` — Multi-turn chat with persistent KV cache sessions
+
+## Sessions
+
+The `session` kwarg enables multi-turn conversations with persistent KV cache. The first call with a given `session` ID processes the full prompt. Subsequent calls with the same ID only process new tokens, reusing the cached attention state for faster responses.
+
+```python
+import llm
+
+# First turn — processes full prompt, caches KV state
+r1 = llm.generate("model.gguf", "Hello!", session="chat1")
+
+# Second turn — only processes new tokens, reuses cached context
+r2 = llm.generate("model.gguf", "Tell me more", session="chat1")
+
+# Clear session when done to free memory
+llm.clear_session("model.gguf", "chat1")
+```
+
+Multiple sessions can coexist on the same model (e.g. `"chat1"`, `"chat2"`). Each session maintains its own independent KV cache.

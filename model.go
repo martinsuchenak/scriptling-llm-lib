@@ -28,31 +28,20 @@ type KVCache struct {
 	V [][]float64
 }
 
-type InferenceModel struct {
-	Config      ModelConfig
-	TokenEmb    [][]float64
-	Blocks      []TransformerBlock
-	FinalNormW  []float64
-	OutputW     interface{}
-	OutputWQ8   *QuantWeight
-	KVCaches    []KVCache
-	Tokenizer   *Tokenizer
-	ChatTpl     string
-	nHeads      int
-	nKVHeads    int
-	dK          int
-	nRep        int
-	ropeFreqs   []float64
-	ropeHalfDim int
+type sessionEntry struct {
+	kvCaches []KVCache
+	kvPos    int
 }
 
 type modelCache struct {
-	mu     sync.Mutex
-	models map[string]*InferenceModel
+	mu       sync.Mutex
+	models   map[string]*InferenceModel
+	sessions map[string]map[string]*sessionEntry
 }
 
 var globalModelCache = &modelCache{
-	models: make(map[string]*InferenceModel),
+	models:   make(map[string]*InferenceModel),
+	sessions: make(map[string]map[string]*sessionEntry),
 }
 
 func (c *modelCache) getOrLoad(path string) (*InferenceModel, error) {
@@ -75,6 +64,66 @@ func (c *modelCache) getOrLoad(path string) (*InferenceModel, error) {
 
 	c.models[path] = model
 	return model, nil
+}
+
+type InferenceModel struct {
+	Config      ModelConfig
+	TokenEmb    [][]float64
+	Blocks      []TransformerBlock
+	FinalNormW  []float64
+	OutputW     interface{}
+	OutputWQ8   *QuantWeight
+	KVCaches    []KVCache
+	Tokenizer   *Tokenizer
+	ChatTpl     string
+	nHeads      int
+	nKVHeads    int
+	dK          int
+	nRep        int
+	ropeFreqs   []float64
+	ropeHalfDim int
+}
+
+func copyKVCaches(caches []KVCache) []KVCache {
+	result := make([]KVCache, len(caches))
+	for i, c := range caches {
+		result[i] = KVCache{
+			K: make([][]float64, len(c.K)),
+			V: make([][]float64, len(c.V)),
+		}
+		for h := range c.K {
+			result[i].K[h] = append([]float64(nil), c.K[h]...)
+			result[i].V[h] = append([]float64(nil), c.V[h]...)
+		}
+	}
+	return result
+}
+
+func (c *modelCache) getSession(modelPath, sessionID string) *sessionEntry {
+	sessions, ok := c.sessions[modelPath]
+	if !ok {
+		return nil
+	}
+	return sessions[sessionID]
+}
+
+func (c *modelCache) saveSession(modelPath, sessionID string, caches []KVCache, kvPos int) {
+	if _, ok := c.sessions[modelPath]; !ok {
+		c.sessions[modelPath] = make(map[string]*sessionEntry)
+	}
+	c.sessions[modelPath][sessionID] = &sessionEntry{
+		kvCaches: copyKVCaches(caches),
+		kvPos:    kvPos,
+	}
+}
+
+func (c *modelCache) clearSession(modelPath, sessionID string) {
+	if sessions, ok := c.sessions[modelPath]; ok {
+		delete(sessions, sessionID)
+		if len(sessions) == 0 {
+			delete(c.sessions, modelPath)
+		}
+	}
 }
 
 func buildInferenceModel(gguf *GGUFModel, path string) (*InferenceModel, error) {
@@ -632,27 +681,33 @@ func modelMatmulRowFloat(w [][]float64, normed []float64) []float64 {
 	return logits
 }
 
-func (m *InferenceModel) Generate(prompt string, maxTokens int, strategy string, temperature float64, topK int, topP float64, repeatPenalty float64, repeatLastN int, systemPrompt string, templateName string) (string, int, int) {
-	if templateName != "" {
-		if tpl, ok := defaultTemplates[templateName]; ok {
-			prompt = applyChatTemplate(tpl, prompt, systemPrompt)
+func (m *InferenceModel) Generate(prompt string, maxTokens int, strategy string, temperature float64, topK int, topP float64, repeatPenalty float64, repeatLastN int, systemPrompt string, templateName string, kvStartPos int) (string, int, int, int) {
+	if kvStartPos == 0 {
+		if templateName != "" {
+			if tpl, ok := defaultTemplates[templateName]; ok {
+				prompt = applyChatTemplate(tpl, prompt, systemPrompt)
+			}
+		} else if m.ChatTpl != "" {
+			prompt = applyChatTemplate(m.ChatTpl, prompt, systemPrompt)
 		}
-	} else if m.ChatTpl != "" {
-		prompt = applyChatTemplate(m.ChatTpl, prompt, systemPrompt)
+	} else {
+		prompt = "<|im_end|>\n<|im_start|>user\n" + prompt + "<|im_end|>\n<|im_start|>assistant\n"
 	}
 
 	tokenIDs := m.Tokenizer.Encode(prompt)
 	nPrompt := len(tokenIDs)
 
-	m.initKVCaches()
+	if kvStartPos == 0 {
+		m.initKVCaches()
+	}
 
 	context := tokenIDs
 	maxLen := m.Config.MaxSeqLen
-	if len(context) > maxLen {
-		context = context[len(context)-maxLen:]
+	if len(context)+kvStartPos > maxLen {
+		context = context[len(context)+kvStartPos-maxLen:]
 	}
 
-	logits := m.Forward(context, 0)
+	logits := m.Forward(context, kvStartPos)
 
 	recent := make([]int64, len(tokenIDs))
 	for i, id := range tokenIDs {
@@ -668,12 +723,13 @@ func (m *InferenceModel) Generate(prompt string, maxTokens int, strategy string,
 	recent = append(recent, int64(nextID))
 
 	if nextID == m.Tokenizer.EOSID {
-		return m.Tokenizer.Decode(tokenIDs), 1, nPrompt
+		finalPos := kvStartPos + nPrompt
+		return m.Tokenizer.Decode(tokenIDs), 1, nPrompt, finalPos
 	}
 
 	nGen := 1
 	for step := 1; step < maxTokens; step++ {
-		pos := len(tokenIDs) - 1
+		pos := kvStartPos + nPrompt + step - 1
 
 		logits = m.Forward([]int{nextID}, pos)
 
@@ -691,7 +747,8 @@ func (m *InferenceModel) Generate(prompt string, maxTokens int, strategy string,
 		}
 	}
 
-	return m.Tokenizer.Decode(tokenIDs), nGen, nPrompt
+	finalPos := kvStartPos + nPrompt + nGen - 1
+	return m.Tokenizer.Decode(tokenIDs), nGen, nPrompt, finalPos
 }
 
 func sampleLogits(logits []float64, strategy string, temperature float64, topK int, topP float64) int {
@@ -933,18 +990,46 @@ func fnGenerate(ctx context.Context, kwargs object.Kwargs, args ...object.Object
 		}
 	}
 
+	var sessionID string
+	if kwargs.Has("session") {
+		s, ok := kwargs.Get("session").(*object.String)
+		if ok {
+			sessionID = s.Value
+		}
+	}
+
 	model, err := globalModelCache.getOrLoad(modelPath.Value)
 	if err != nil {
 		return errors.NewError("generate: %s", err.Error())
 	}
 
+	kvStartPos := 0
+
+	if sessionID != "" {
+		globalModelCache.mu.Lock()
+		entry := globalModelCache.getSession(modelPath.Value, sessionID)
+		if entry != nil {
+			model.KVCaches = copyKVCaches(entry.kvCaches)
+			kvStartPos = entry.kvPos
+		} else {
+			model.initKVCaches()
+		}
+		globalModelCache.mu.Unlock()
+	}
+
 	tGenStart := time.Now()
-	result, nGen, nPrompt := model.Generate(
+	result, nGen, nPrompt, finalPos := model.Generate(
 		prompt.Value, maxTokens, strategy, temperature,
 		topK, topP, repeatPenalty, repeatLastN,
-		systemPrompt, templateName,
+		systemPrompt, templateName, kvStartPos,
 	)
 	tGenEnd := time.Now()
+
+	if sessionID != "" {
+		globalModelCache.mu.Lock()
+		globalModelCache.saveSession(modelPath.Value, sessionID, model.KVCaches, finalPos)
+		globalModelCache.mu.Unlock()
+	}
 
 	if showStats {
 		genTime := tGenEnd.Sub(tGenStart).Seconds()
@@ -957,4 +1042,26 @@ func fnGenerate(ctx context.Context, kwargs object.Kwargs, args ...object.Object
 	}
 
 	return &object.String{Value: result}
+}
+
+func fnClearSession(ctx context.Context, kwargs object.Kwargs, args ...object.Object) object.Object {
+	if err := errors.ExactArgs(args, 2); err != nil {
+		return err
+	}
+
+	modelPath, ok := args[0].(*object.String)
+	if !ok {
+		return errors.NewTypeError("STRING", args[0].Type().String())
+	}
+
+	sessionID, ok := args[1].(*object.String)
+	if !ok {
+		return errors.NewTypeError("STRING", args[1].Type().String())
+	}
+
+	globalModelCache.mu.Lock()
+	globalModelCache.clearSession(modelPath.Value, sessionID.Value)
+	globalModelCache.mu.Unlock()
+
+	return object.NewBoolean(true)
 }

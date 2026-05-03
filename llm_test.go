@@ -13,8 +13,8 @@ func TestLibraryRegistration(t *testing.T) {
 
 	funcs := Library.Functions()
 	funcCount := len(funcs)
-	if funcCount != 55 {
-		t.Errorf("Library has %d functions, want 55", funcCount)
+	if funcCount != 56 {
+		t.Errorf("Library has %d functions, want 56", funcCount)
 	}
 
 	required := []string{

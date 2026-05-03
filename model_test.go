@@ -4,6 +4,8 @@ import (
 	"math"
 	"os"
 	"testing"
+
+	"github.com/paularlott/scriptling/object"
 )
 
 func TestKVCacheStructure(t *testing.T) {
@@ -81,7 +83,7 @@ func TestInferenceModelGenerate(t *testing.T) {
 
 	model.initKVCaches()
 
-	output, nGen, nPrompt := model.Generate("Hello", 10, "greedy", 0, 0, 0, 0, 0, "", "")
+	output, nGen, nPrompt, _ := model.Generate("Hello", 10, "greedy", 0, 0, 0, 0, 0, "", "", 0)
 
 	if nPrompt == 0 {
 		t.Error("prompt tokens should be > 0")
@@ -187,4 +189,154 @@ func buildInferenceModelTest(path string) (*InferenceModel, error) {
 	}
 	gguf.Metadata["_path"] = path
 	return buildInferenceModel(gguf, path)
+}
+
+func TestCopyKVCaches(t *testing.T) {
+	original := []KVCache{
+		{
+			K: [][]float64{{1.0, 2.0, 3.0}},
+			V: [][]float64{{4.0, 5.0, 6.0}},
+		},
+	}
+
+	copied := copyKVCaches(original)
+
+	if len(copied) != 1 {
+		t.Fatalf("copyKVCaches len = %d, want 1", len(copied))
+	}
+
+	copied[0].K[0][0] = 999.0
+	if original[0].K[0][0] == 999.0 {
+		t.Error("copyKVCaches did not deep copy - modifying copy affected original")
+	}
+}
+
+func TestSessionStoreGetSaveClear(t *testing.T) {
+	mc := &modelCache{
+		models:   make(map[string]*InferenceModel),
+		sessions: make(map[string]map[string]*sessionEntry),
+	}
+
+	if entry := mc.getSession("model.gguf", "s1"); entry != nil {
+		t.Error("getSession on empty should return nil")
+	}
+
+	caches := []KVCache{
+		{K: [][]float64{{1.0, 2.0}}, V: [][]float64{{3.0, 4.0}}},
+	}
+	mc.saveSession("model.gguf", "s1", caches, 10)
+
+	entry := mc.getSession("model.gguf", "s1")
+	if entry == nil {
+		t.Fatal("getSession after save should return entry")
+	}
+	if entry.kvPos != 10 {
+		t.Errorf("kvPos = %d, want 10", entry.kvPos)
+	}
+
+	mc.saveSession("model.gguf", "s2", caches, 20)
+	if len(mc.sessions["model.gguf"]) != 2 {
+		t.Errorf("expected 2 sessions, got %d", len(mc.sessions["model.gguf"]))
+	}
+
+	mc.clearSession("model.gguf", "s1")
+	if mc.getSession("model.gguf", "s1") != nil {
+		t.Error("getSession after clear should return nil")
+	}
+	if mc.getSession("model.gguf", "s2") == nil {
+		t.Error("s2 should still exist")
+	}
+
+	mc.clearSession("model.gguf", "s2")
+	if len(mc.sessions["model.gguf"]) != 0 {
+		t.Error("sessions map should be empty after clearing all sessions")
+	}
+}
+
+func TestClearSessionFn(t *testing.T) {
+	assertError(t, fnClearSession(ctx, noopKwargs), "2 arguments")
+	assertError(t, fnClearSession(ctx, noopKwargs, &object.Integer{Value: 1}, &object.String{Value: "s1"}), "STRING")
+	assertError(t, fnClearSession(ctx, noopKwargs, &object.String{Value: "model.gguf"}, &object.Integer{Value: 1}), "STRING")
+
+	result := fnClearSession(ctx, noopKwargs, &object.String{Value: "model.gguf"}, &object.String{Value: "nonexistent"})
+	b, err := result.AsBool()
+	if err != nil || !b {
+		t.Error("clear_session on nonexistent session should return true")
+	}
+}
+
+func TestGenerateWithSessionIntegration(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping session integration test in short mode")
+	}
+
+	path := "models/SmolLM2-135M-Instruct-Q8_0.gguf"
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		t.Skip("model file not found")
+	}
+
+	kwargs1 := object.NewKwargs(map[string]object.Object{
+		"session": &object.String{Value: "test-session-1"},
+		"stats":   object.NewInteger(0),
+	})
+
+	result1 := fnGenerate(ctx, kwargs1,
+		&object.String{Value: path},
+		&object.String{Value: "Hello"},
+		object.NewInteger(10),
+		&object.String{Value: "greedy"},
+	)
+
+	s1, ok := result1.(*object.String)
+	if !ok {
+		t.Fatalf("first generate returned %s, want STRING", result1.Type().String())
+	}
+	if s1.Value == "" {
+		t.Error("first generate returned empty string")
+	}
+
+	globalModelCache.mu.Lock()
+	entry := globalModelCache.getSession(path, "test-session-1")
+	if entry == nil {
+		t.Fatal("session not found after first generate")
+	}
+	if entry.kvPos <= 0 {
+		t.Errorf("kvPos = %d, want > 0", entry.kvPos)
+	}
+	savedPos := entry.kvPos
+	globalModelCache.mu.Unlock()
+
+	kwargs2 := object.NewKwargs(map[string]object.Object{
+		"session": &object.String{Value: "test-session-1"},
+	})
+
+	result2 := fnGenerate(ctx, kwargs2,
+		&object.String{Value: path},
+		&object.String{Value: "What else"},
+		object.NewInteger(5),
+		&object.String{Value: "greedy"},
+	)
+
+	s2, ok := result2.(*object.String)
+	if !ok {
+		t.Fatalf("second generate returned %s, want STRING", result2.Type().String())
+	}
+	if s2.Value == "" {
+		t.Error("second generate returned empty string")
+	}
+
+	globalModelCache.mu.Lock()
+	entry2 := globalModelCache.getSession(path, "test-session-1")
+	if entry2.kvPos <= savedPos {
+		t.Errorf("kvPos after second generate = %d, should be > first kvPos %d", entry2.kvPos, savedPos)
+	}
+	globalModelCache.mu.Unlock()
+
+	fnClearSession(ctx, noopKwargs, &object.String{Value: path}, &object.String{Value: "test-session-1"})
+
+	globalModelCache.mu.Lock()
+	if globalModelCache.getSession(path, "test-session-1") != nil {
+		t.Error("session should be cleared")
+	}
+	globalModelCache.mu.Unlock()
 }

@@ -468,6 +468,17 @@ Parameters:
 Returns:
   String of raw Q8_0 block bytes.`,
 		},
+		"clear_session": {
+			Fn: fnClearSession,
+			HelpText: `clear_session(model_path, session_id) - Clear a cached session's KV cache
+
+Parameters:
+  model_path - path to .gguf model file
+  session_id - session identifier to clear
+
+Returns:
+  Boolean true.`,
+		},
 		"generate": {
 			Fn: fnGenerate,
 			HelpText: `generate(model_path, prompt, max_tokens=100, strategy="greedy") - Generate text from a GGUF model
@@ -479,7 +490,7 @@ Parameters:
   strategy   - sampling strategy: greedy, temperature, top_k, top_p
 
 Keyword args: temperature, top_k, top_p, repeat_penalty, repeat_last_n,
-              system_prompt, template, stats
+              system_prompt, template, stats, session
 
 Returns:
   Generated text string.`,
