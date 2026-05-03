@@ -202,6 +202,8 @@ func mapTensorName(name string) string {
 		{"blk.", ".attn_k.weight", "blocks.%d.attn.w_k.weight"},
 		{"blk.", ".attn_v.weight", "blocks.%d.attn.w_v.weight"},
 		{"blk.", ".attn_output.weight", "blocks.%d.attn.w_o.weight"},
+		{"blk.", ".attn_q_norm.weight", "blocks.%d.attn_q_norm.weight"},
+		{"blk.", ".attn_k_norm.weight", "blocks.%d.attn_k_norm.weight"},
 		{"blk.", ".ffn_norm.weight", "blocks.%d.ffn_norm.weight"},
 		{"blk.", ".ffn_gate.weight", "blocks.%d.ffn.w_gate.weight"},
 		{"blk.", ".ffn_down.weight", "blocks.%d.ffn.w_down.weight"},

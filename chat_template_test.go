@@ -10,7 +10,7 @@ func TestChatTemplateJinja2Detection(t *testing.T) {
 {% endfor %}<|im_start|>assistant
 `
 	result := applyChatTemplate(jinjaTpl, "hello", "")
-	if result != "<|im_start|>system\nYou are a helpful AI assistant named SmolLM, trained by Hugging Face<|im_end|>\n<|im_start|>user\nhello<|im_end|>\n<|im_start|>assistant\n" {
+	if result != "<|im_start|>system\nYou are a helpful AI assistant.\n/no_think<|im_end|>\n<|im_start|>user\nhello<|im_end|>\n<|im_start|>assistant\n" {
 		t.Errorf("jinja2 template result = %q", result)
 	}
 }

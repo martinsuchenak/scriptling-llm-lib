@@ -17,6 +17,8 @@ type TransformerBlock struct {
 	WK        interface{}
 	WV        interface{}
 	WO        interface{}
+	QNormW    []float64
+	KNormW    []float64
 	FFNNormW  []float64
 	WGate     interface{}
 	WUp       interface{}
@@ -97,6 +99,18 @@ func copyKVCaches(caches []KVCache) []KVCache {
 		}
 	}
 	return result
+}
+
+func loadOptional1D(gguf *GGUFModel, name string) []float64 {
+	iface, err := gguf.LoadTensor(name)
+	if err != nil {
+		return nil
+	}
+	f, ok := iface.([]float64)
+	if !ok {
+		return nil
+	}
+	return f
 }
 
 func (c *modelCache) getSession(modelPath, sessionID string) *sessionEntry {
@@ -231,6 +245,8 @@ func buildInferenceModel(gguf *GGUFModel, path string) (*InferenceModel, error) 
 			WK:        wk,
 			WV:        wv,
 			WO:        wo,
+			QNormW:    loadOptional1D(gguf, prefix+"attn_q_norm.weight"),
+			KNormW:    loadOptional1D(gguf, prefix+"attn_k_norm.weight"),
 			FFNNormW:  ffnNormW,
 			WGate:     wGate,
 			WUp:       wUp,
@@ -330,6 +346,17 @@ func (m *InferenceModel) forwardBlock(blockIdx int, xData []float64, seqLen, dMo
 	qHeads := splitHeadsData(qData, qRows, qCols, m.nHeads)
 	kHeads := splitHeadsData(kData, kRows, kCols, m.nKVHeads)
 	vHeads := splitHeadsData(vData, vRows, vCols, m.nKVHeads)
+
+	if block.QNormW != nil {
+		for h := 0; h < m.nHeads; h++ {
+			rmsNormFlat(qHeads[h], block.QNormW, eps, qRows, m.dK, qHeads[h])
+		}
+	}
+	if block.KNormW != nil {
+		for h := 0; h < m.nKVHeads; h++ {
+			rmsNormFlat(kHeads[h], block.KNormW, eps, kRows, m.dK, kHeads[h])
+		}
+	}
 
 	for h := 0; h < m.nHeads; h++ {
 		applyRopeInPlace(qHeads[h], qRows, m.dK, startPos, m.ropeFreqs, m.ropeHalfDim)

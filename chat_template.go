@@ -7,7 +7,7 @@ import (
 func applyChatTemplate(template string, prompt string, systemPrompt string) string {
 	if strings.Contains(template, "{% for ") || strings.Contains(template, "{{") {
 		if systemPrompt == "" {
-			systemPrompt = "You are a helpful AI assistant named SmolLM, trained by Hugging Face"
+			systemPrompt = "You are a helpful AI assistant.\n/no_think"
 		}
 		return "<|im_start|>system\n" + systemPrompt + "<|im_end|>\n<|im_start|>user\n" + prompt + "<|im_end|>\n<|im_start|>assistant\n"
 	}
