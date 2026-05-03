@@ -4,10 +4,14 @@ import (
 	"strings"
 )
 
-func applyChatTemplate(template string, prompt string, systemPrompt string) string {
+func applyChatTemplate(template string, prompt string, systemPrompt string, arch string) string {
 	if strings.Contains(template, "{% for ") || strings.Contains(template, "{{") {
 		if systemPrompt == "" {
-			systemPrompt = "You are a helpful AI assistant.\n/no_think"
+			if arch == "qwen3" {
+				systemPrompt = "You are a helpful AI assistant.\n/no_think"
+			} else {
+				systemPrompt = "You are a helpful AI assistant."
+			}
 		}
 		return "<|im_start|>system\n" + systemPrompt + "<|im_end|>\n<|im_start|>user\n" + prompt + "<|im_end|>\n<|im_start|>assistant\n"
 	}

@@ -9,23 +9,48 @@ func TestChatTemplateJinja2Detection(t *testing.T) {
 {{ message.content }}<|im_end|>
 {% endfor %}<|im_start|>assistant
 `
-	result := applyChatTemplate(jinjaTpl, "hello", "")
-	if result != "<|im_start|>system\nYou are a helpful AI assistant.\n/no_think<|im_end|>\n<|im_start|>user\nhello<|im_end|>\n<|im_start|>assistant\n" {
+	result := applyChatTemplate(jinjaTpl, "hello", "", "")
+	if result != "<|im_start|>system\nYou are a helpful AI assistant.<|im_end|>\n<|im_start|>user\nhello<|im_end|>\n<|im_start|>assistant\n" {
 		t.Errorf("jinja2 template result = %q", result)
 	}
 }
 
 func TestChatTemplateJinja2WithSystem(t *testing.T) {
 	tpl := "{{ messages }}"
-	result := applyChatTemplate(tpl, "test prompt", "custom system")
+	result := applyChatTemplate(tpl, "test prompt", "custom system", "")
 	if result != "<|im_start|>system\ncustom system<|im_end|>\n<|im_start|>user\ntest prompt<|im_end|>\n<|im_start|>assistant\n" {
 		t.Errorf("jinja2 with system = %q", result)
 	}
 }
 
+func TestChatTemplateJinja2Qwen3(t *testing.T) {
+	jinjaTpl := `{% for message in messages %}{{ message.content }}{% endfor %}`
+	result := applyChatTemplate(jinjaTpl, "hello", "", "qwen3")
+	if !containsStr(result, "/no_think") {
+		t.Errorf("qwen3 template should contain /no_think, got %q", result)
+	}
+	result2 := applyChatTemplate(jinjaTpl, "hello", "", "llama")
+	if containsStr(result2, "/no_think") {
+		t.Errorf("llama template should NOT contain /no_think, got %q", result2)
+	}
+}
+
+func containsStr(s, sub string) bool {
+	return len(s) >= len(sub) && (s == sub || len(s) > 0 && containsHelper(s, sub))
+}
+
+func containsHelper(s, sub string) bool {
+	for i := 0; i <= len(s)-len(sub); i++ {
+		if s[i:i+len(sub)] == sub {
+			return true
+		}
+	}
+	return false
+}
+
 func TestChatTemplateSimpleSubstitution(t *testing.T) {
 	tpl := "User: {prompt}\nAssistant:"
-	result := applyChatTemplate(tpl, "hello", "")
+	result := applyChatTemplate(tpl, "hello", "", "")
 	if result != "User: hello\nAssistant:" {
 		t.Errorf("simple template = %q", result)
 	}
@@ -33,7 +58,7 @@ func TestChatTemplateSimpleSubstitution(t *testing.T) {
 
 func TestChatTemplateSystemPrompt(t *testing.T) {
 	tpl := "System: {system_prompt}\nUser: {prompt}\nAssistant:"
-	result := applyChatTemplate(tpl, "hi", "be helpful")
+	result := applyChatTemplate(tpl, "hi", "be helpful", "")
 	if result != "System: be helpful\nUser: hi\nAssistant:" {
 		t.Errorf("system template = %q", result)
 	}
@@ -41,7 +66,7 @@ func TestChatTemplateSystemPrompt(t *testing.T) {
 
 func TestChatTemplateConditionalWithSystem(t *testing.T) {
 	tpl := "{% if system_prompt %}System: {system_prompt}\n{% endif %}User: {prompt}\nAssistant:"
-	result := applyChatTemplate(tpl, "hi", "be helpful")
+	result := applyChatTemplate(tpl, "hi", "be helpful", "")
 	if result != "System: be helpful\nUser: hi\nAssistant:" {
 		t.Errorf("conditional with system = %q", result)
 	}
@@ -49,7 +74,7 @@ func TestChatTemplateConditionalWithSystem(t *testing.T) {
 
 func TestChatTemplateConditionalNoSystem(t *testing.T) {
 	tpl := "{% if system_prompt %}System: {system_prompt}\n{% endif %}User: {prompt}\nAssistant:"
-	result := applyChatTemplate(tpl, "hi", "")
+	result := applyChatTemplate(tpl, "hi", "", "")
 	if result != "User: hi\nAssistant:" {
 		t.Errorf("conditional without system = %q", result)
 	}

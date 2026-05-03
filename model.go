@@ -70,6 +70,7 @@ func (c *modelCache) getOrLoad(path string) (*InferenceModel, error) {
 
 type InferenceModel struct {
 	Config      ModelConfig
+	Arch        string
 	TokenEmb    [][]float64
 	Blocks      []TransformerBlock
 	FinalNormW  []float64
@@ -280,8 +281,14 @@ func buildInferenceModel(gguf *GGUFModel, path string) (*InferenceModel, error) 
 		tokenizer = NewTokenizer(td.Vocab, nil, td.Special)
 	}
 
+	arch := ""
+	if v, ok := gguf.Metadata["general.architecture"]; ok {
+		arch, _ = v.(string)
+	}
+
 	return &InferenceModel{
 		Config:      cfg,
+		Arch:        arch,
 		TokenEmb:    tokenEmb,
 		Blocks:      blocks,
 		FinalNormW:  finalNormW,
@@ -713,10 +720,10 @@ func (m *InferenceModel) Generate(prompt string, maxTokens int, strategy string,
 	if kvStartPos == 0 {
 		if templateName != "" {
 			if tpl, ok := defaultTemplates[templateName]; ok {
-				prompt = applyChatTemplate(tpl, prompt, systemPrompt)
-			}
-		} else if m.ChatTpl != "" {
-			prompt = applyChatTemplate(m.ChatTpl, prompt, systemPrompt)
+			prompt = applyChatTemplate(tpl, prompt, systemPrompt, m.Arch)
+		}
+	} else if m.ChatTpl != "" {
+		prompt = applyChatTemplate(m.ChatTpl, prompt, systemPrompt, m.Arch)
 		}
 	} else {
 		prompt = "<|im_end|>\n<|im_start|>user\n" + prompt + "<|im_end|>\n<|im_start|>assistant\n"
