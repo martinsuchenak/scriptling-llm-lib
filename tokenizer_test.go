@@ -29,17 +29,17 @@ func TestTokenizerSimpleVocab(t *testing.T) {
 
 func TestTokenizerBPESentencepiece(t *testing.T) {
 	vocab := map[string]int{
-		" h":      0,
-		" e":      1,
-		" l":      2,
-		" lo":     3,
-		" hel":    4,
-		" hello":  5,
-		" w":      6,
-		" wo":     7,
-		" wor":    8,
-		" world":  9,
-		"<unk>":   10,
+		" h":     0,
+		" e":     1,
+		" l":     2,
+		" lo":    3,
+		" hel":   4,
+		" hello": 5,
+		" w":     6,
+		" wo":    7,
+		" wor":   8,
+		" world": 9,
+		"<unk>":  10,
 	}
 	special := map[string]int{"<unk>": 10}
 	merges := [][2]string{

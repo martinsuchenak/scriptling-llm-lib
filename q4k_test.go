@@ -208,8 +208,8 @@ func TestQ4KLinearViaDict(t *testing.T) {
 	block := makeQ4KBlock(1.0, 0.0, scales, qs)
 
 	d := object.NewStringDict(map[string]object.Object{
-		"q4k":           object.NewInteger(1),
-		"raw":           &object.String{Value: string(block)},
+		"q4k":            object.NewInteger(1),
+		"raw":            &object.String{Value: string(block)},
 		"blocks_per_row": object.NewInteger(1),
 	})
 

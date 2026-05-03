@@ -23,11 +23,11 @@ var ggufTypeSizes = map[int]int{
 }
 
 type tensorInfo struct {
-	Name       string
-	Dims       []uint64
-	Type       uint32
-	Offset     uint64
-	RawOffset  int64
+	Name      string
+	Dims      []uint64
+	Type      uint32
+	Offset    uint64
+	RawOffset int64
 }
 
 type GGUFModel struct {
@@ -78,12 +78,6 @@ type ggufReader struct {
 
 func newGGUFReader(data []byte) *ggufReader {
 	return &ggufReader{data: data}
-}
-
-func (r *ggufReader) readBytes(n int) []byte {
-	b := r.data[r.pos : r.pos+n]
-	r.pos += n
-	return b
 }
 
 func (r *ggufReader) readUint8() uint8 {
@@ -138,12 +132,6 @@ func (r *ggufReader) readFloat64() float64 {
 	return math.Float64frombits(v)
 }
 
-func (r *ggufReader) readFloat16() float64 {
-	bits := binary.LittleEndian.Uint16(r.data[r.pos:])
-	r.pos += 2
-	return float16ToFloat64(bits)
-}
-
 func (r *ggufReader) readString() string {
 	length := r.readUint64()
 	if length == 0 {
@@ -195,9 +183,9 @@ func (r *ggufReader) readValue(vtype uint32) interface{} {
 
 func mapTensorName(name string) string {
 	static := map[string]string{
-		"token_embd.weight":    "token_embedding.weight",
-		"output_norm.weight":   "final_norm.weight",
-		"output.weight":        "output.weight",
+		"token_embd.weight":  "token_embedding.weight",
+		"output_norm.weight": "final_norm.weight",
+		"output.weight":      "output.weight",
 	}
 
 	if mapped, ok := static[name]; ok {
@@ -341,17 +329,6 @@ func metaFloatSlice(m map[string]interface{}, key string) []float64 {
 		return result
 	}
 	return nil
-}
-
-func metaBool(m map[string]interface{}, key string, defaultVal bool) bool {
-	v, ok := m[key]
-	if !ok {
-		return defaultVal
-	}
-	if b, ok := v.(bool); ok {
-		return b
-	}
-	return defaultVal
 }
 
 func dequantizeF32(data []byte, offset int, nElements int) []float64 {
@@ -554,10 +531,10 @@ func LoadGGUF(path string) (*GGUFModel, error) {
 		tOffset := r.readUint64()
 		mapped := mapTensorName(name)
 		tensorInfos[i] = &tensorInfo{
-			Name:      mapped,
-			Dims:      dims,
-			Type:      ggufType,
-			Offset:    tOffset,
+			Name:   mapped,
+			Dims:   dims,
+			Type:   ggufType,
+			Offset: tOffset,
 		}
 	}
 
@@ -766,23 +743,23 @@ func (g *GGUFModel) loadQuantized2D(fileData []byte, ti *tensorInfo, actualRows,
 		groupSize := 32
 		blockSize := 0
 		qType := ""
-	switch ti.Type {
-	case 0, 1:
-		flat := g.dequantize1D(fileData, ti, nElements)
-		return reshape2D(flat, actualRows, actualCols)
-	case 2:
-		blockSize = 18
-		qType = "q4"
-	case 3:
-		blockSize = 20
-		qType = "q4_1"
-	case 6:
-		blockSize = 22
-		qType = "q5"
-	case 8:
-		blockSize = 34
-		qType = "q8"
-	}
+		switch ti.Type {
+		case 0, 1:
+			flat := g.dequantize1D(fileData, ti, nElements)
+			return reshape2D(flat, actualRows, actualCols)
+		case 2:
+			blockSize = 18
+			qType = "q4"
+		case 3:
+			blockSize = 20
+			qType = "q4_1"
+		case 6:
+			blockSize = 22
+			qType = "q5"
+		case 8:
+			blockSize = 34
+			qType = "q8"
+		}
 
 		if blockSize > 0 {
 			nGroups := nElements / groupSize

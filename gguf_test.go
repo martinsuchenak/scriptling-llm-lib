@@ -63,9 +63,9 @@ func TestGGUFLoadInvalidFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer os.Remove(f.Name())
-	f.Write([]byte("NOT_A_GGUF_FILE"))
-	f.Close()
+	defer func() { _ = os.Remove(f.Name()) }()
+	_, _ = f.Write([]byte("NOT_A_GGUF_FILE"))
+	_ = f.Close()
 
 	_, err = LoadGGUF(f.Name())
 	if err == nil {

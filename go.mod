@@ -2,9 +2,7 @@ module github.com/martinsuchenak/scriptling-llm-lib
 
 go 1.26.2
 
-require github.com/paularlott/scriptling v0.6.3
-
-replace github.com/paularlott/scriptling => /Users/martinsuchenak/Projects/other/scriptling
+require github.com/paularlott/scriptling v0.6.4
 
 require (
 	github.com/BurntSushi/toml v1.6.0 // indirect

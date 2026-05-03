@@ -47,7 +47,7 @@ type InferenceModel struct {
 }
 
 type modelCache struct {
-	mu    sync.Mutex
+	mu     sync.Mutex
 	models map[string]*InferenceModel
 }
 

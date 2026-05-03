@@ -241,107 +241,107 @@ Example:
 		},
 
 		"rms_norm": {
-			Fn: fnRmsNorm,
+			Fn:       fnRmsNorm,
 			HelpText: `rms_norm(x, weight, eps=1e-5) - RMS normalization`,
 		},
 		"rope": {
-			Fn: fnRope,
+			Fn:       fnRope,
 			HelpText: `rope(x, start_pos=0) - Rotary Position Embeddings`,
 		},
 		"silu_gate": {
-			Fn: fnSiluGate,
+			Fn:       fnSiluGate,
 			HelpText: `silu_gate(gate, up) - Fused SiLU activation + element-wise multiply`,
 		},
 		"attention": {
-			Fn: fnAttention,
+			Fn:       fnAttention,
 			HelpText: `attention(q, k, v, causal=True) - Scaled dot-product attention`,
 		},
 		"linear": {
-			Fn: fnLinear,
+			Fn:       fnLinear,
 			HelpText: `linear(x, weight, bias=None) - Fused matrix multiply + optional bias add`,
 		},
 		"linear_row": {
-			Fn: fnLinearRow,
+			Fn:       fnLinearRow,
 			HelpText: `linear_row(x, weight, bias=None) - Last-row-only linear`,
 		},
 		"linear_q8": {
-			Fn: fnLinearQ8Fast,
+			Fn:       fnLinearQ8Fast,
 			HelpText: `linear_q8(x, raw, groups_per_row) - Quantized Q8_0 matmul (fast)`,
 		},
 		"linear_row_q8": {
-			Fn: fnLinearRowQ8Fast,
+			Fn:       fnLinearRowQ8Fast,
 			HelpText: `linear_row_q8(x, raw, groups_per_row) - Last-row-only Q8_0 matmul (fast)`,
 		},
 		"linear_q4": {
-			Fn: fnLinearQ4Fast,
+			Fn:       fnLinearQ4Fast,
 			HelpText: `linear_q4(x, raw, groups_per_row) - Quantized Q4_0 matmul (fast)`,
 		},
 		"linear_row_q4": {
-			Fn: fnLinearRowQ4Fast,
+			Fn:       fnLinearRowQ4Fast,
 			HelpText: `linear_row_q4(x, raw, groups_per_row) - Last-row-only Q4_0 matmul (fast)`,
 		},
 		"linear_q5": {
-			Fn: fnLinearQ5Fast,
+			Fn:       fnLinearQ5Fast,
 			HelpText: `linear_q5(x, raw, groups_per_row) - Quantized Q5_0 matmul (fast)`,
 		},
 		"linear_row_q5": {
-			Fn: fnLinearRowQ5Fast,
+			Fn:       fnLinearRowQ5Fast,
 			HelpText: `linear_row_q5(x, raw, groups_per_row) - Last-row-only Q5_0 matmul (fast)`,
 		},
 		"top_k": {
-			Fn: fnTopK,
+			Fn:       fnTopK,
 			HelpText: `top_k(logits, k) - Find the k highest-scoring elements`,
 		},
 		"dequantize_q8": {
-			Fn: fnDequantizeQ8,
+			Fn:       fnDequantizeQ8,
 			HelpText: `dequantize_q8(data, scales, group_size) - Dequantize int8 with per-group scales`,
 		},
 		"dequantize_q8_0": {
-			Fn: fnDequantizeQ8_0,
+			Fn:       fnDequantizeQ8_0,
 			HelpText: `dequantize_q8_0(raw, n_groups) - Native GGUF Q8_0 block dequantization`,
 		},
 		"dequantize_q4_0": {
-			Fn: fnDequantizeQ4_0,
+			Fn:       fnDequantizeQ4_0,
 			HelpText: `dequantize_q4_0(raw, n_groups) - Native GGUF Q4_0 block dequantization`,
 		},
 		"dequantize_q5_0": {
-			Fn: fnDequantizeQ5_0,
+			Fn:       fnDequantizeQ5_0,
 			HelpText: `dequantize_q5_0(raw, n_groups) - Native GGUF Q5_0 block dequantization`,
 		},
 		"linear_q4_k": {
-			Fn: fnLinearQ4K,
+			Fn:       fnLinearQ4K,
 			HelpText: `linear_q4_k(x, raw, blocks_per_row) - Quantized Q4_K matmul`,
 		},
 		"linear_row_q4_k": {
-			Fn: fnLinearRowQ4K,
+			Fn:       fnLinearRowQ4K,
 			HelpText: `linear_row_q4_k(x, raw, blocks_per_row) - Last-row-only Q4_K matmul`,
 		},
 		"dequantize_q4_k": {
-			Fn: fnDequantizeQ4K,
+			Fn:       fnDequantizeQ4K,
 			HelpText: `dequantize_q4_k(raw, n_blocks) - Native GGUF Q4_K block dequantization`,
 		},
 		"linear_q6_k": {
-			Fn: fnLinearQ6K,
+			Fn:       fnLinearQ6K,
 			HelpText: `linear_q6_k(x, raw, blocks_per_row) - Quantized Q6_K matmul`,
 		},
 		"linear_row_q6_k": {
-			Fn: fnLinearRowQ6K,
+			Fn:       fnLinearRowQ6K,
 			HelpText: `linear_row_q6_k(x, raw, blocks_per_row) - Last-row-only Q6_K matmul`,
 		},
 		"dequantize_q6_k": {
-			Fn: fnDequantizeQ6K,
+			Fn:       fnDequantizeQ6K,
 			HelpText: `dequantize_q6_k(raw, n_blocks) - Native GGUF Q6_K block dequantization`,
 		},
 		"output_logits": {
-			Fn: fnOutputLogits,
+			Fn:       fnOutputLogits,
 			HelpText: `output_logits(x, norm_weight, output_weight) - Fused RMS norm + output projection`,
 		},
 		"fused_qkv": {
-			Fn: fnFusedQKV,
+			Fn:       fnFusedQKV,
 			HelpText: `fused_qkv(x, w_q, w_k, w_v) - Parallel QKV projection`,
 		},
 		"fused_ffn": {
-			Fn: fnFusedFFN,
+			Fn:       fnFusedFFN,
 			HelpText: `fused_ffn(x, w_gate, w_up, w_down) - Fused gate+up+silu+down`,
 		},
 		"fused_block": {
@@ -351,11 +351,11 @@ Example:
 Returns: [result, new_k_heads, new_v_heads]`,
 		},
 		"fused_rope_batch": {
-			Fn: fnFusedRopeBatch,
+			Fn:       fnFusedRopeBatch,
 			HelpText: `fused_rope_batch(heads, start_pos, freq_base=, rope_dim=) - Batch RoPE`,
 		},
 		"fused_attention": {
-			Fn: fnFusedAttention,
+			Fn:       fnFusedAttention,
 			HelpText: `fused_attention(q_heads, k_heads, v_heads, causal=True) - Multi-head attention in one call`,
 		},
 		"sample": {
@@ -413,15 +413,15 @@ Returns:
   Expanded list of FloatArrays.`,
 		},
 		"concat_rows": {
-			Fn: fnConcatRows,
+			Fn:       fnConcatRows,
 			HelpText: `concat_rows(a, b) - Concatenate two matrices along row axis`,
 		},
 		"slice_rows": {
-			Fn: fnSliceRows,
+			Fn:       fnSliceRows,
 			HelpText: `slice_rows(x, start, end) - Extract rows [start, end)`,
 		},
 		"flatten": {
-			Fn: fnFlatten,
+			Fn:       fnFlatten,
 			HelpText: `flatten(x) - Flatten 2D matrix to 1D`,
 		},
 		"reshape": {
@@ -450,11 +450,11 @@ Returns:
   1D or 2D FloatArray filled with zeros.`,
 		},
 		"arange": {
-			Fn: fnArange,
+			Fn:       fnArange,
 			HelpText: `arange(stop) or arange(start, stop[, step]) - Create range FloatArray`,
 		},
 		"quantize_q8": {
-			Fn: fnQuantizeQ8,
+			Fn:       fnQuantizeQ8,
 			HelpText: `quantize_q8(data, rows, cols) - Quantize flat float data to Q8_0 raw bytes`,
 		},
 		"quantize_q8_rows": {

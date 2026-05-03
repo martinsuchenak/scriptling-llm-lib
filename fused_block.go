@@ -375,5 +375,3 @@ func mustGetIntArg(arg object.Object, defaultVal int64) int64 {
 	}
 	return v
 }
-
-

@@ -170,8 +170,8 @@ func TestLinearQ5ViaDict(t *testing.T) {
 	rawStr := string(group)
 
 	d := object.NewStringDict(map[string]object.Object{
-		"q5":            object.NewInteger(1),
-		"raw":           &object.String{Value: rawStr},
+		"q5":             object.NewInteger(1),
+		"raw":            &object.String{Value: rawStr},
 		"groups_per_row": object.NewInteger(1),
 	})
 

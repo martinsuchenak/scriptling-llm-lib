@@ -177,10 +177,11 @@ func fnLinearRowQ4K(ctx context.Context, kwargs object.Kwargs, args ...object.Ob
 
 // q4kDotBlock computes dot product of a Q4_K block with a float64 vector.
 // Block layout (144 bytes, 256 elements):
-//   [0..1]   d     : f16 super-block scale
-//   [2..3]   dmin  : f16 super-block minimum
-//   [4..15]  scales: 12 bytes packed 6-bit scales+mins for 8 sub-blocks
-//   [16..143] qs   : 128 bytes = 256 nibbles (4-bit quantized values)
+//
+//	[0..1]   d     : f16 super-block scale
+//	[2..3]   dmin  : f16 super-block minimum
+//	[4..15]  scales: 12 bytes packed 6-bit scales+mins for 8 sub-blocks
+//	[16..143] qs   : 128 bytes = 256 nibbles (4-bit quantized values)
 //
 // Dequant formula per value: (d * scale_6bit) * quant_4bit - (dmin * min_6bit)
 // Processing: 4 groups of 64, each group uses 2 sub-blocks (is, is+1):

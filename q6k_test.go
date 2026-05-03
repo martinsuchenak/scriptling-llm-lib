@@ -183,7 +183,7 @@ func TestDequantizeQ6KBlock(t *testing.T) {
 	out := make([]float64, 256)
 	dequantizeQ6KBlock(block, 0, out, 0)
 
-	qVal := int(int8((0x0F&0xF)|0)) - 32
+	qVal := int(int8(0x0F&0xF)) - 32
 	expected := 1.0 * float64(int8(5)) * float64(qVal)
 	if math.Abs(out[0]-expected) > 1e-10 {
 		t.Errorf("dequantizeQ6KBlock[0] = %f, want %f", out[0], expected)
@@ -230,8 +230,8 @@ func TestQ6KLinearViaDict(t *testing.T) {
 	rawStr := string(block)
 
 	d := object.NewStringDict(map[string]object.Object{
-		"q6k":           object.NewInteger(1),
-		"raw":           &object.String{Value: rawStr},
+		"q6k":            object.NewInteger(1),
+		"raw":            &object.String{Value: rawStr},
 		"blocks_per_row": object.NewInteger(1),
 	})
 

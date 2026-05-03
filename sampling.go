@@ -209,8 +209,8 @@ func sampleTopP(logits []float64, temperature float64, p float64, n int) object.
 	probs := softmax(scaled, 1.0)
 
 	type idxProb struct {
-		idx   int
-		prob  float64
+		idx  int
+		prob float64
 	}
 	sorted := make([]idxProb, n)
 	for i, pr := range probs {

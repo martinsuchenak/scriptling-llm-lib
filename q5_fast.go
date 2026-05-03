@@ -16,8 +16,8 @@ func q5DotGroupX(raw []byte, rawOff int, xData []float64, xBase int) float64 {
 
 	var sum float64
 	for j := 0; j < 16; j++ {
-		xh0 := byte((qh >> (j + 0)) << 4) & 0x10
-		xh1 := byte(qh >> (j + 12)) & 0x10
+		xh0 := byte((qh>>(j+0))<<4) & 0x10
+		xh1 := byte(qh>>(j+12)) & 0x10
 
 		v0 := float64(int32((qs[j]&0x0F)|xh0)) - 16
 		v1 := float64(int32((qs[j]>>4)|xh1)) - 16
@@ -34,8 +34,8 @@ func q5DotGroup(raw []byte, rawOff int, x []float64, xOff int) float64 {
 
 	var sum float64
 	for j := 0; j < 16; j++ {
-		xh0 := byte((qh >> (j + 0)) << 4) & 0x10
-		xh1 := byte(qh >> (j + 12)) & 0x10
+		xh0 := byte((qh>>(j+0))<<4) & 0x10
+		xh1 := byte(qh>>(j+12)) & 0x10
 
 		v0 := float64(int32((qs[j]&0x0F)|xh0)) - 16
 		v1 := float64(int32((qs[j]>>4)|xh1)) - 16
@@ -208,8 +208,8 @@ func fnDequantizeQ5_0(ctx context.Context, kwargs object.Kwargs, args ...object.
 		outOff := g * 32
 
 		for j := 0; j < 16; j++ {
-			xh0 := byte((qh >> (j + 0)) << 4) & 0x10
-			xh1 := byte(qh >> (j + 12)) & 0x10
+			xh0 := byte((qh>>(j+0))<<4) & 0x10
+			xh1 := byte(qh>>(j+12)) & 0x10
 			x0 := float64(int32((rawBytes[qsOff+j]&0x0F)|xh0)) - 16
 			x1 := float64(int32((rawBytes[qsOff+j]>>4)|xh1)) - 16
 			result[outOff+j] = x0 * d
