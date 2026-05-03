@@ -720,10 +720,10 @@ func (m *InferenceModel) Generate(prompt string, maxTokens int, strategy string,
 	if kvStartPos == 0 {
 		if templateName != "" {
 			if tpl, ok := defaultTemplates[templateName]; ok {
-			prompt = applyChatTemplate(tpl, prompt, systemPrompt, m.Arch)
-		}
-	} else if m.ChatTpl != "" {
-		prompt = applyChatTemplate(m.ChatTpl, prompt, systemPrompt, m.Arch)
+				prompt = applyChatTemplate(tpl, prompt, systemPrompt, m.Arch)
+			}
+		} else if m.ChatTpl != "" {
+			prompt = applyChatTemplate(m.ChatTpl, prompt, systemPrompt, m.Arch)
 		}
 	} else {
 		prompt = "<|im_end|>\n<|im_start|>user\n" + prompt + "<|im_end|>\n<|im_start|>assistant\n"
