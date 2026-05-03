@@ -93,7 +93,7 @@ func TestFusedAttentionHead(t *testing.T) {
 	vData := []float64{1.0, 0.0, 0.0, 1.0}
 
 	out := make([]float64, 2)
-	fusedAttentionHead(qData, kData, vData, 1, 2, 2, false, out, 0)
+	fusedAttentionHead(qData, kData, vData, 1, 2, 2, false, 0, out, 0)
 
 	total := out[0] + out[1]
 	if total < 0.99 || total > 1.01 {
@@ -110,7 +110,7 @@ func TestFusedAttentionHeadCausal(t *testing.T) {
 	vData := []float64{1.0, 0.0, 0.0, 1.0}
 
 	out := make([]float64, 4)
-	fusedAttentionHead(qData, kData, vData, 2, 2, 2, true, out, 0)
+	fusedAttentionHead(qData, kData, vData, 2, 2, 2, true, 0, out, 0)
 
 	if out[0] < 0.99 {
 		t.Errorf("causal row0 should attend only to pos0: got %f", out[0])

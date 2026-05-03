@@ -354,9 +354,10 @@ func (m *InferenceModel) forwardBlock(blockIdx int, xData []float64, seqLen, dMo
 	}
 
 	kvLen := len(kHeads[0]) / m.dK
+	cacheLen := kvLen - seqLen
 	attnOut := make([]float64, seqLen*m.nHeads*m.dK)
 	for h := 0; h < m.nHeads; h++ {
-		fusedAttentionHead(qHeads[h], kHeads[h], vHeads[h], seqLen, m.dK, kvLen, true, attnOut, h*seqLen*m.dK)
+		fusedAttentionHead(qHeads[h], kHeads[h], vHeads[h], seqLen, m.dK, kvLen, true, cacheLen, attnOut, h*seqLen*m.dK)
 	}
 
 	merged := mergeHeadsData(attnOut, seqLen, m.nHeads, m.dK)
@@ -724,7 +725,7 @@ func (m *InferenceModel) Generate(prompt string, maxTokens int, strategy string,
 
 	if nextID == m.Tokenizer.EOSID {
 		finalPos := kvStartPos + nPrompt
-		return m.Tokenizer.Decode(tokenIDs), 1, nPrompt, finalPos
+		return m.Tokenizer.Decode(tokenIDs[nPrompt:]), 1, nPrompt, finalPos
 	}
 
 	nGen := 1
@@ -748,7 +749,7 @@ func (m *InferenceModel) Generate(prompt string, maxTokens int, strategy string,
 	}
 
 	finalPos := kvStartPos + nPrompt + nGen - 1
-	return m.Tokenizer.Decode(tokenIDs), nGen, nPrompt, finalPos
+	return m.Tokenizer.Decode(tokenIDs[nPrompt:]), nGen, nPrompt, finalPos
 }
 
 func sampleLogits(logits []float64, strategy string, temperature float64, topK int, topP float64) int {

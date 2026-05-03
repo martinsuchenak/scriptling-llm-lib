@@ -154,7 +154,7 @@ func fnFusedBlock(ctx context.Context, kwargs object.Kwargs, args ...object.Obje
 	kvLen := len(kHeads[0]) / dK
 	attnOut := make([]float64, xRows*nHeads*dK)
 	for h := 0; h < nHeads; h++ {
-		fusedAttentionHead(qHeads[h], kHeads[h], vHeads[h], qRows, dK, kvLen, causal, attnOut, h*qRows*dK)
+		fusedAttentionHead(qHeads[h], kHeads[h], vHeads[h], qRows, dK, kvLen, causal, 0, attnOut, h*qRows*dK)
 	}
 
 	// Step 7: Merge heads
@@ -259,7 +259,7 @@ func applyRopeInPlace(data []float64, rows, dK, startPos int, freqs []float64, h
 	}
 }
 
-func fusedAttentionHead(qData, kData, vData []float64, qRows, dK, kRows int, causal bool, out []float64, outOff int) {
+func fusedAttentionHead(qData, kData, vData []float64, qRows, dK, kRows int, causal bool, cacheLen int, out []float64, outOff int) {
 	scale := 1.0 / math.Sqrt(float64(dK))
 	for qi := 0; qi < qRows; qi++ {
 		qOff := qi * dK
@@ -272,8 +272,9 @@ func fusedAttentionHead(qData, kData, vData []float64, qRows, dK, kRows int, cau
 			}
 			scores[ki] = dot * scale
 		}
-		if causal && qRows > 1 {
-			for ki := qi + 1; ki < kRows; ki++ {
+		if causal {
+			limit := cacheLen + qi + 1
+			for ki := limit; ki < kRows; ki++ {
 				scores[ki] = math.Inf(-1)
 			}
 		}
