@@ -34,10 +34,10 @@ func applyChatTemplate(template string, prompt string, systemPrompt string) stri
 		if thenMarker == -1 {
 			break
 		}
-		thenMarker += startIdx + 2
+		thenMarker += startIdx
 
 		condition := strings.TrimSpace(result[startIdx+6 : thenMarker])
-		blockContent := result[thenMarker:endIf]
+		blockContent := result[thenMarker+2 : endIf]
 
 		if condition == "system_prompt" || condition == "system_message" {
 			if systemPrompt != "" {

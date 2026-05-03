@@ -99,6 +99,17 @@ func fnRope(ctx context.Context, kwargs object.Kwargs, args ...object.Object) ob
 		ropeDim = int(kwargs.MustGetInt("rope_dim", 0))
 	}
 
+	validateEven := func(cols int) object.Object {
+		effectiveDim := cols
+		if ropeDim > 0 && ropeDim < cols {
+			effectiveDim = ropeDim
+		}
+		if effectiveDim%2 != 0 {
+			return errors.NewError("rope: dimension must be even, got %d", effectiveDim)
+		}
+		return nil
+	}
+
 	applyRope := func(xData []float64, xRows, xCols int) []float64 {
 		effectiveDim := xCols
 		if ropeDim > 0 && ropeDim < xCols {
@@ -130,6 +141,9 @@ func fnRope(ctx context.Context, kwargs object.Kwargs, args ...object.Object) ob
 		if xRows == 0 {
 			return object.NewFloatArray2D(nil, 0, 0)
 		}
+		if errObj := validateEven(xCols); errObj != nil {
+			return errObj
+		}
 		data := applyRope(xData, xRows, xCols)
 		return object.NewFloatArray2D(data, xRows, xCols)
 	}
@@ -140,6 +154,9 @@ func fnRope(ctx context.Context, kwargs object.Kwargs, args ...object.Object) ob
 	}
 	if len(x) == 0 {
 		return object.NewFloatArray2D(nil, 0, 0)
+	}
+	if errObj := validateEven(len(x[0])); errObj != nil {
+		return errObj
 	}
 	dk := len(x[0])
 	seqLen := len(x)
