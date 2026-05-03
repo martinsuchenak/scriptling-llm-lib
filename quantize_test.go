@@ -211,3 +211,38 @@ func TestFloat64ToFloat16Special(t *testing.T) {
 		t.Errorf("float64ToFloat16(-Inf) = 0x%04X, want 0", got)
 	}
 }
+
+func TestDequantizeQ4_0NibbleOrder(t *testing.T) {
+	data := make([]byte, 18)
+	binary.LittleEndian.PutUint16(data[0:2], 0x3C00) // scale = 1.0
+
+	for j := 0; j < 16; j++ {
+		data[2+j] = 0x09 // lo=9 (value 1), hi=0 (value -8)
+	}
+
+	result := dequantizeQ4_0Native(data, 0, 32)
+
+	for j := 0; j < 16; j++ {
+		if math.Abs(result[j]-(1.0)) > 1e-10 {
+			t.Errorf("result[%d] = %f, want 1.0 (lo nibble of byte %d)", j, result[j], j)
+		}
+		if math.Abs(result[j+16]-(-8.0)) > 1e-10 {
+			t.Errorf("result[%d] = %f, want -8.0 (hi nibble of byte %d)", j+16, result[j+16], j)
+		}
+	}
+
+	for j := 0; j < 16; j++ {
+		data[2+j] = byte(j<<4 | (j + 1))
+	}
+	result = dequantizeQ4_0Native(data, 0, 32)
+	for j := 0; j < 16; j++ {
+		lo := float64(int8((j+1)&0x0F) - 8)
+		hi := float64(int8(byte(j)&0x0F) - 8)
+		if math.Abs(result[j]-lo) > 1e-10 {
+			t.Errorf("result[%d] = %f, want %f", j, result[j], lo)
+		}
+		if math.Abs(result[j+16]-hi) > 1e-10 {
+			t.Errorf("result[%d] = %f, want %f", j+16, result[j+16], hi)
+		}
+	}
+}

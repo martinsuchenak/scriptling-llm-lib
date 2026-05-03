@@ -370,10 +370,10 @@ func dequantizeQ4_0Native(data []byte, offset int, nElements int) []float64 {
 		scale := float16ToFloat64(binary.LittleEndian.Uint16(data[base:]))
 		for i := 0; i < 16; i++ {
 			b := data[base+2+i]
-			qLow := int8(b&0x0F) - 8
-			qHigh := int8((b>>4)&0x0F) - 8
-			result[g*32+i*2] = float64(qLow) * scale
-			result[g*32+i*2+1] = float64(qHigh) * scale
+			qLow := float64(int8(b&0x0F) - 8)
+			qHigh := float64(int8((b>>4)&0x0F) - 8)
+			result[g*32+i] = qLow * scale
+			result[g*32+16+i] = qHigh * scale
 		}
 	}
 	return result
@@ -390,8 +390,8 @@ func dequantizeQ4_1Native(data []byte, offset int, nElements int) []float64 {
 			b := data[base+4+i]
 			qLow := float64(b & 0x0F)
 			qHigh := float64((b >> 4) & 0x0F)
-			result[g*32+i*2] = qLow*d + m
-			result[g*32+i*2+1] = qHigh*d + m
+			result[g*32+i] = qLow*d + m
+			result[g*32+16+i] = qHigh*d + m
 		}
 	}
 	return result
@@ -435,32 +435,14 @@ func dequantizeQ4KNative(data []byte, offset int, nElements int) []float64 {
 			m1v := dmin * float64(m0)
 			d2 := d * float64(sc1)
 			m2v := dmin * float64(m1)
-			for w := 0; w < 4; w++ {
-				for bit := 0; bit < 8; bit++ {
-					qb := data[qsOff+qPos+w*4+bit/2]
-					if bit%2 == 0 {
-						val := d1*float64(qb&0xF) - m1v
-						result[b*256+group*64+w*8+bit] = val
-					} else {
-						val := d1*float64(qb>>4) - m1v
-						result[b*256+group*64+w*8+bit] = val
-					}
-				}
+			qBase := qsOff + qPos
+			for l := 0; l < 32; l++ {
+				result[b*256+group*64+l] = d1*float64(data[qBase+l]&0xF) - m1v
 			}
-			qPos += 16
-			for w := 0; w < 4; w++ {
-				for bit := 0; bit < 8; bit++ {
-					qb := data[qsOff+qPos+w*4+bit/2]
-					if bit%2 == 0 {
-						val := d2*float64(qb&0xF) - m2v
-						result[b*256+group*64+32+w*8+bit] = val
-					} else {
-						val := d2*float64(qb>>4) - m2v
-						result[b*256+group*64+32+w*8+bit] = val
-					}
-				}
+			for l := 0; l < 32; l++ {
+				result[b*256+group*64+32+l] = d2*float64(data[qBase+l]>>4) - m2v
 			}
-			qPos += 16
+			qPos += 32
 			is += 2
 		}
 	}
@@ -472,23 +454,32 @@ func dequantizeQ6KNative(data []byte, offset int, nElements int) []float64 {
 	result := make([]float64, nElements)
 	for b := 0; b < nBlocks; b++ {
 		base := offset + b*210
+		d := float16ToFloat64(binary.LittleEndian.Uint16(data[base+208:]))
 		qlOff := base + 0
 		qhOff := base + 128
 		scalesOff := base + 192
-		d := float16ToFloat64(binary.LittleEndian.Uint16(data[base+208:]))
+		outOff := b * 256
 
-		for j := 0; j < 256; j++ {
-			q := int32(data[qlOff+j]) & 63
-			qhIdx := j / 4
-			qhShift := 2 * (j % 4)
-			h := (int32(data[qhOff+qhIdx]) >> qhShift) & 3
-			qVal := int32(q) | (h << 6)
-			if qVal >= 128 {
-				qVal -= 256
+		for n := 0; n < 256; n += 128 {
+			for l := 0; l < 32; l++ {
+				is := l / 16
+				q1 := int(int8((data[qlOff+l]&0xF)|((data[qhOff+l]>>0)&3)<<4)) - 32
+				q2 := int(int8((data[qlOff+l+32]&0xF)|((data[qhOff+l]>>2)&3)<<4)) - 32
+				q3 := int(int8((data[qlOff+l]>>4)|((data[qhOff+l]>>4)&3)<<4)) - 32
+				q4 := int(int8((data[qlOff+l+32]>>4)|((data[qhOff+l]>>6)&3)<<4)) - 32
+				sc0 := float64(int8(data[scalesOff+is+0]))
+				sc2 := float64(int8(data[scalesOff+is+2]))
+				sc4 := float64(int8(data[scalesOff+is+4]))
+				sc6 := float64(int8(data[scalesOff+is+6]))
+				result[outOff+l+0] = d * sc0 * float64(q1)
+				result[outOff+l+32] = d * sc2 * float64(q2)
+				result[outOff+l+64] = d * sc4 * float64(q3)
+				result[outOff+l+96] = d * sc6 * float64(q4)
 			}
-			scaleIdx := j / 16
-			sc := int8(data[scalesOff+scaleIdx])
-			result[b*256+j] = float64(qVal) * d * float64(sc)
+			outOff += 128
+			qlOff += 64
+			qhOff += 32
+			scalesOff += 8
 		}
 	}
 	return result

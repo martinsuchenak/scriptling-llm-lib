@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/binary"
 	"math"
-	"unsafe"
 
 	"github.com/paularlott/scriptling/errors"
 	"github.com/paularlott/scriptling/object"
@@ -31,38 +30,13 @@ func q4kDotBlockFast(raw []byte, blkOff int, x []float64, xOff int) float64 {
 		qBase := qsOff + qPos
 		xBase := xOff + group*64
 
-		qw := unsafe.Slice((*uint64)(unsafe.Pointer(&raw[qBase])), 4)
-		for w := 0; w < 4; w++ {
-			chunk := qw[w]
-			b0 := byte(chunk)
-			b1 := byte(chunk >> 8)
-			b2 := byte(chunk >> 16)
-			b3 := byte(chunk >> 24)
-			b4 := byte(chunk >> 32)
-			b5 := byte(chunk >> 40)
-			b6 := byte(chunk >> 48)
-			b7 := byte(chunk >> 56)
-			i := xBase + w*8
-			sum += (d1*float64(b0&0xF)-m1v)*x[i] + (d1*float64(b1&0xF)-m1v)*x[i+1] +
-				(d1*float64(b2&0xF)-m1v)*x[i+2] + (d1*float64(b3&0xF)-m1v)*x[i+3] +
-				(d1*float64(b4&0xF)-m1v)*x[i+4] + (d1*float64(b5&0xF)-m1v)*x[i+5] +
-				(d1*float64(b6&0xF)-m1v)*x[i+6] + (d1*float64(b7&0xF)-m1v)*x[i+7]
+		for l := 0; l < 32; l++ {
+			q := float64(raw[qBase+l] & 0xF)
+			sum += (d1*q - m1v) * x[xBase+l]
 		}
-		for w := 0; w < 4; w++ {
-			chunk := qw[w]
-			b0 := byte(chunk)
-			b1 := byte(chunk >> 8)
-			b2 := byte(chunk >> 16)
-			b3 := byte(chunk >> 24)
-			b4 := byte(chunk >> 32)
-			b5 := byte(chunk >> 40)
-			b6 := byte(chunk >> 48)
-			b7 := byte(chunk >> 56)
-			i := xBase + 32 + w*8
-			sum += (d2*float64(b0>>4)-m2v)*x[i] + (d2*float64(b1>>4)-m2v)*x[i+1] +
-				(d2*float64(b2>>4)-m2v)*x[i+2] + (d2*float64(b3>>4)-m2v)*x[i+3] +
-				(d2*float64(b4>>4)-m2v)*x[i+4] + (d2*float64(b5>>4)-m2v)*x[i+5] +
-				(d2*float64(b6>>4)-m2v)*x[i+6] + (d2*float64(b7>>4)-m2v)*x[i+7]
+		for l := 0; l < 32; l++ {
+			q := float64(raw[qBase+l] >> 4)
+			sum += (d2*q - m2v) * x[xBase+32+l]
 		}
 
 		qPos += 32

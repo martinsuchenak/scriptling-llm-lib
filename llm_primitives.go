@@ -1028,8 +1028,8 @@ func dequantizeQ4_0Block(raw []byte, off int) (scale float64, values [32]int8) {
 	scale = float16ToFloat64(binary.LittleEndian.Uint16(raw[off : off+2]))
 	for i := 0; i < 16; i++ {
 		b := raw[off+2+i]
-		values[i*2] = int8(b&0x0F) - 8
-		values[i*2+1] = int8((b>>4)&0x0F) - 8
+		values[i] = int8(b&0x0F) - 8
+		values[16+i] = int8((b>>4)&0x0F) - 8
 	}
 	return
 }

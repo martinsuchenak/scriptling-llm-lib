@@ -142,6 +142,51 @@ func TestQ41DotGroupXWithMin(t *testing.T) {
 	}
 }
 
+func TestQ4DotGroupXNibbleOrder(t *testing.T) {
+	group := make([]byte, 18)
+	binary.LittleEndian.PutUint16(group[0:2], 0x3C00) // scale = 1.0
+
+	for j := 0; j < 16; j++ {
+		group[2+j] = 0x09 // lo nibble = 9 (value 1), hi nibble = 0 (value -8)
+	}
+
+	xData := make([]float64, 32)
+
+	result := q4DotGroupX(group, 0, xData, 0)
+	if math.Abs(result) > 1e-10 {
+		t.Fatalf("all-zero x should give 0, got %f", result)
+	}
+
+	xData[5] = 1.0
+	result = q4DotGroupX(group, 0, xData, 0)
+	if math.Abs(result-1.0) > 1e-10 {
+		t.Errorf("x[5]=1, lo nibble=9 → value 1, want 1.0, got %f", result)
+	}
+
+	for i := range xData {
+		xData[i] = 0.0
+	}
+	xData[21] = 1.0
+	result = q4DotGroupX(group, 0, xData, 0)
+	if math.Abs(result-(-8.0)) > 1e-10 {
+		t.Errorf("x[21]=1, hi nibble of byte 5=0 → value -8, want -8.0, got %f", result)
+	}
+
+	for j := 0; j < 16; j++ {
+		group[2+j] = 0xA3 // lo nibble = 3 (value -5), hi nibble = A (value 2)
+	}
+	for i := range xData {
+		xData[i] = 0.0
+	}
+	xData[3] = 3.0
+	xData[19] = 7.0
+	result = q4DotGroupX(group, 0, xData, 0)
+	expected := -5.0*3.0 + 2.0*7.0 // byte 3: lo=3→-5 at pos 3, hi=A→2 at pos 19
+	if math.Abs(result-expected) > 1e-10 {
+		t.Errorf("want %f, got %f", expected, result)
+	}
+}
+
 func TestLinearQ8Fast(t *testing.T) {
 	ones := make([]float64, 32)
 	for i := range ones {

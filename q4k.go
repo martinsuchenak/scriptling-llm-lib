@@ -209,14 +209,12 @@ func q4kDotBlock(raw []byte, blkOff int, x []float64, xOff int) float64 {
 		xBase := xOff + group*64
 
 		for l := 0; l < 32; l++ {
-			q := int(raw[qBase+l])
-			qLo := float64(q & 0xF)
-			sum += (d1*qLo - m1val) * x[xBase+l]
+			q := float64(raw[qBase+l] & 0xF)
+			sum += (d1*q - m1val) * x[xBase+l]
 		}
 		for l := 0; l < 32; l++ {
-			q := int(raw[qBase+l])
-			qHi := float64((q >> 4) & 0xF)
-			sum += (d2*qHi - m2val) * x[xBase+32+l]
+			q := float64(raw[qBase+l] >> 4)
+			sum += (d2*q - m2val) * x[xBase+32+l]
 		}
 
 		qPos += 32
@@ -268,12 +266,10 @@ func fnDequantizeQ4K(ctx context.Context, kwargs object.Kwargs, args ...object.O
 
 			qBase := qsOff + qPos
 			for l := 0; l < 32; l++ {
-				q := int(rawBytes[qBase+l])
-				result[outOff+group*64+l] = d1*float64(q&0xF) - m1val
+				result[outOff+group*64+l] = d1*float64(rawBytes[qBase+l]&0xF) - m1val
 			}
 			for l := 0; l < 32; l++ {
-				q := int(rawBytes[qBase+l])
-				result[outOff+group*64+32+l] = d2*float64((q>>4)&0xF) - m2val
+				result[outOff+group*64+32+l] = d2*float64(rawBytes[qBase+l]>>4) - m2val
 			}
 
 			qPos += 32
