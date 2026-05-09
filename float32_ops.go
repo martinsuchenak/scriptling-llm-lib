@@ -560,11 +560,10 @@ func modelMatmulFloatIntoF32(wFlat []float32, xData []float32, xRows, xCols int,
 }
 
 func q8DotRowsF32(raw []byte, rOff int, xData []float32, xOff, groups int) float32 {
-	var sum float32
-	for g := 0; g < groups; g++ {
-		sum += q8DotGroupXF32(raw, rOff+g*34, xData, xOff+g*32)
+	if groups > 0 {
+		return q8DotRowsAsm(&raw[rOff], &xData[xOff], groups)
 	}
-	return sum
+	return 0
 }
 
 func q4DotRowsF32(raw []byte, rOff int, xData []float32, xOff, groups int) float32 {

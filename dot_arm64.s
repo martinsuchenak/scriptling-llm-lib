@@ -1,0 +1,228 @@
+//go:build arm64
+
+#include "textflag.h"
+
+// func q8DotRowsAsm(rawPtr *byte, xPtr *float32, groups int) float32
+//
+// Scalar arm64 implementation using FCVTHS for f16→f32 conversion.
+// Each Q8_0 group: 2-byte f16 scale + 32 int8 = 34 bytes.
+// x data: 32 float32 per group = 128 bytes per group.
+//
+// ABI0 stack layout:
+//   rawPtr  +0(FP)  8 bytes
+//   xPtr    +8(FP)  8 bytes
+//   groups  +16(FP) 8 bytes
+//   ret     +24(FP) 4 bytes
+
+TEXT ·q8DotRowsAsm(SB), NOSPLIT, $0-28
+	MOVD rawPtr+0(FP), R0
+	MOVD xPtr+8(FP), R1
+	MOVD groups+16(FP), R2
+
+	FMOVS $0, F24
+
+loop:
+	CBZ R2, done
+	SUB $1, R2, R2
+
+	// f16 scale → f32 via FCVTHS
+	MOVHU (R0), R3
+	FMOVD R3, F0
+	FCVTHS F0, F0
+
+	// int8 data starts at raw+2
+	ADD $2, R0, R4
+
+	// Process 32 int8 × float32, 4 at a time (8 iterations)
+	// Accumulate in F25, then multiply by scale
+	FMOVS $0, F25
+
+	// iter 0: elements 0-3
+	MOVB (R4), R6
+	MOVB 1(R4), R7
+	MOVB 2(R4), R8
+	MOVB 3(R4), R9
+	SCVTFS R6, F1
+	SCVTFS R7, F2
+	SCVTFS R8, F3
+	SCVTFS R9, F4
+	FMOVS (R1), F5
+	FMOVS 4(R1), F6
+	FMOVS 8(R1), F7
+	FMOVS 12(R1), F8
+	FMULS F1, F5, F1
+	FMULS F2, F6, F2
+	FMULS F3, F7, F3
+	FMULS F4, F8, F4
+	FADDS F1, F2, F1
+	FADDS F3, F4, F3
+	FADDS F1, F3, F1
+	FADDS F1, F25, F25
+
+	// iter 1: elements 4-7
+	MOVB 4(R4), R6
+	MOVB 5(R4), R7
+	MOVB 6(R4), R8
+	MOVB 7(R4), R9
+	SCVTFS R6, F1
+	SCVTFS R7, F2
+	SCVTFS R8, F3
+	SCVTFS R9, F4
+	FMOVS 16(R1), F5
+	FMOVS 20(R1), F6
+	FMOVS 24(R1), F7
+	FMOVS 28(R1), F8
+	FMULS F1, F5, F1
+	FMULS F2, F6, F2
+	FMULS F3, F7, F3
+	FMULS F4, F8, F4
+	FADDS F1, F2, F1
+	FADDS F3, F4, F3
+	FADDS F1, F3, F1
+	FADDS F1, F25, F25
+
+	// iter 2: elements 8-11
+	MOVB 8(R4), R6
+	MOVB 9(R4), R7
+	MOVB 10(R4), R8
+	MOVB 11(R4), R9
+	SCVTFS R6, F1
+	SCVTFS R7, F2
+	SCVTFS R8, F3
+	SCVTFS R9, F4
+	FMOVS 32(R1), F5
+	FMOVS 36(R1), F6
+	FMOVS 40(R1), F7
+	FMOVS 44(R1), F8
+	FMULS F1, F5, F1
+	FMULS F2, F6, F2
+	FMULS F3, F7, F3
+	FMULS F4, F8, F4
+	FADDS F1, F2, F1
+	FADDS F3, F4, F3
+	FADDS F1, F3, F1
+	FADDS F1, F25, F25
+
+	// iter 3: elements 12-15
+	MOVB 12(R4), R6
+	MOVB 13(R4), R7
+	MOVB 14(R4), R8
+	MOVB 15(R4), R9
+	SCVTFS R6, F1
+	SCVTFS R7, F2
+	SCVTFS R8, F3
+	SCVTFS R9, F4
+	FMOVS 48(R1), F5
+	FMOVS 52(R1), F6
+	FMOVS 56(R1), F7
+	FMOVS 60(R1), F8
+	FMULS F1, F5, F1
+	FMULS F2, F6, F2
+	FMULS F3, F7, F3
+	FMULS F4, F8, F4
+	FADDS F1, F2, F1
+	FADDS F3, F4, F3
+	FADDS F1, F3, F1
+	FADDS F1, F25, F25
+
+	// iter 4: elements 16-19
+	MOVB 16(R4), R6
+	MOVB 17(R4), R7
+	MOVB 18(R4), R8
+	MOVB 19(R4), R9
+	SCVTFS R6, F1
+	SCVTFS R7, F2
+	SCVTFS R8, F3
+	SCVTFS R9, F4
+	FMOVS 64(R1), F5
+	FMOVS 68(R1), F6
+	FMOVS 72(R1), F7
+	FMOVS 76(R1), F8
+	FMULS F1, F5, F1
+	FMULS F2, F6, F2
+	FMULS F3, F7, F3
+	FMULS F4, F8, F4
+	FADDS F1, F2, F1
+	FADDS F3, F4, F3
+	FADDS F1, F3, F1
+	FADDS F1, F25, F25
+
+	// iter 5: elements 20-23
+	MOVB 20(R4), R6
+	MOVB 21(R4), R7
+	MOVB 22(R4), R8
+	MOVB 23(R4), R9
+	SCVTFS R6, F1
+	SCVTFS R7, F2
+	SCVTFS R8, F3
+	SCVTFS R9, F4
+	FMOVS 80(R1), F5
+	FMOVS 84(R1), F6
+	FMOVS 88(R1), F7
+	FMOVS 92(R1), F8
+	FMULS F1, F5, F1
+	FMULS F2, F6, F2
+	FMULS F3, F7, F3
+	FMULS F4, F8, F4
+	FADDS F1, F2, F1
+	FADDS F3, F4, F3
+	FADDS F1, F3, F1
+	FADDS F1, F25, F25
+
+	// iter 6: elements 24-27
+	MOVB 24(R4), R6
+	MOVB 25(R4), R7
+	MOVB 26(R4), R8
+	MOVB 27(R4), R9
+	SCVTFS R6, F1
+	SCVTFS R7, F2
+	SCVTFS R8, F3
+	SCVTFS R9, F4
+	FMOVS 96(R1), F5
+	FMOVS 100(R1), F6
+	FMOVS 104(R1), F7
+	FMOVS 108(R1), F8
+	FMULS F1, F5, F1
+	FMULS F2, F6, F2
+	FMULS F3, F7, F3
+	FMULS F4, F8, F4
+	FADDS F1, F2, F1
+	FADDS F3, F4, F3
+	FADDS F1, F3, F1
+	FADDS F1, F25, F25
+
+	// iter 7: elements 28-31
+	MOVB 28(R4), R6
+	MOVB 29(R4), R7
+	MOVB 30(R4), R8
+	MOVB 31(R4), R9
+	SCVTFS R6, F1
+	SCVTFS R7, F2
+	SCVTFS R8, F3
+	SCVTFS R9, F4
+	FMOVS 112(R1), F5
+	FMOVS 116(R1), F6
+	FMOVS 120(R1), F7
+	FMOVS 124(R1), F8
+	FMULS F1, F5, F1
+	FMULS F2, F6, F2
+	FMULS F3, F7, F3
+	FMULS F4, F8, F4
+	FADDS F1, F2, F1
+	FADDS F3, F4, F3
+	FADDS F1, F3, F1
+	FADDS F1, F25, F25
+
+	// Multiply group sum by scale, accumulate
+	FMULS F25, F0, F25
+	FADDS F25, F24, F24
+
+	// Advance pointers
+	ADD $34, R0, R0
+	ADD $128, R1, R1
+
+	JMP loop
+
+done:
+	FMOVS F24, ret+24(FP)
+	RET
