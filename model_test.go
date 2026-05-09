@@ -293,7 +293,7 @@ func TestGenerateWithSessionIntegration(t *testing.T) {
 		t.Skip("skipping session integration test under race detector")
 	}
 
-	globalModelCache.clearModels()
+	globalModelCacheF32.clearModels()
 
 	path := "models/SmolLM2-135M-Instruct-Q8_0.gguf"
 	if _, err := os.Stat(path); os.IsNotExist(err) {
@@ -320,8 +320,8 @@ func TestGenerateWithSessionIntegration(t *testing.T) {
 		t.Error("first generate returned empty string")
 	}
 
-	globalModelCache.mu.Lock()
-	entry := globalModelCache.getSession(path, "test-session-1")
+	globalModelCacheF32.mu.Lock()
+	entry := globalModelCacheF32.getSession(path, "test-session-1")
 	if entry == nil {
 		t.Fatal("session not found after first generate")
 	}
@@ -329,7 +329,7 @@ func TestGenerateWithSessionIntegration(t *testing.T) {
 		t.Errorf("kvPos = %d, want > 0", entry.kvPos)
 	}
 	savedPos := entry.kvPos
-	globalModelCache.mu.Unlock()
+	globalModelCacheF32.mu.Unlock()
 
 	kwargs2 := object.NewKwargs(map[string]object.Object{
 		"session": &object.String{Value: "test-session-1"},
@@ -350,18 +350,18 @@ func TestGenerateWithSessionIntegration(t *testing.T) {
 		t.Error("second generate returned empty string")
 	}
 
-	globalModelCache.mu.Lock()
-	entry2 := globalModelCache.getSession(path, "test-session-1")
+	globalModelCacheF32.mu.Lock()
+	entry2 := globalModelCacheF32.getSession(path, "test-session-1")
 	if entry2.kvPos <= savedPos {
 		t.Errorf("kvPos after second generate = %d, should be > first kvPos %d", entry2.kvPos, savedPos)
 	}
-	globalModelCache.mu.Unlock()
+	globalModelCacheF32.mu.Unlock()
 
 	fnClearSession(ctx, noopKwargs, &object.String{Value: path}, &object.String{Value: "test-session-1"})
 
-	globalModelCache.mu.Lock()
-	if globalModelCache.getSession(path, "test-session-1") != nil {
+	globalModelCacheF32.mu.Lock()
+	if globalModelCacheF32.getSession(path, "test-session-1") != nil {
 		t.Error("session should be cleared")
 	}
-	globalModelCache.mu.Unlock()
+	globalModelCacheF32.mu.Unlock()
 }

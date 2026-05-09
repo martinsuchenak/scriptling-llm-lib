@@ -1040,7 +1040,7 @@ func fnGenerate(ctx context.Context, kwargs object.Kwargs, args ...object.Object
 		}
 	}
 
-	model, err := globalModelCache.getOrLoad(modelPath.Value)
+	model, err := globalModelCacheF32.getOrLoad(modelPath.Value)
 	if err != nil {
 		return errors.NewError("generate: %s", err.Error())
 	}
@@ -1048,15 +1048,15 @@ func fnGenerate(ctx context.Context, kwargs object.Kwargs, args ...object.Object
 	kvStartPos := 0
 
 	if sessionID != "" {
-		globalModelCache.mu.Lock()
-		entry := globalModelCache.getSession(modelPath.Value, sessionID)
+		globalModelCacheF32.mu.Lock()
+		entry := globalModelCacheF32.getSession(modelPath.Value, sessionID)
 		if entry != nil {
-			model.KVCaches = copyKVCaches(entry.kvCaches)
+			model.KVCaches = entry.kvCaches
 			kvStartPos = entry.kvPos
 		} else {
 			model.initKVCaches()
 		}
-		globalModelCache.mu.Unlock()
+		globalModelCacheF32.mu.Unlock()
 	}
 
 	tGenStart := time.Now()
@@ -1068,18 +1068,24 @@ func fnGenerate(ctx context.Context, kwargs object.Kwargs, args ...object.Object
 	tGenEnd := time.Now()
 
 	if sessionID != "" {
-		globalModelCache.mu.Lock()
-		globalModelCache.saveSession(modelPath.Value, sessionID, model.KVCaches, finalPos)
-		globalModelCache.mu.Unlock()
+		globalModelCacheF32.mu.Lock()
+		globalModelCacheF32.saveSession(modelPath.Value, sessionID, model.KVCaches, finalPos)
+		globalModelCacheF32.mu.Unlock()
 	}
 
 	if showStats {
-		genTime := tGenEnd.Sub(tGenStart).Seconds()
-		tps := float64(nGen) / genTime
-		if genTime <= 0 {
-			tps = 0
+		totalTime := tGenEnd.Sub(tGenStart).Seconds()
+		prefillSec := model.PrefillMs / 1000.0
+		decodeSec := model.DecodeMs / 1000.0
+		tps := float64(0)
+		if decodeSec > 0 {
+			tps = float64(nGen) / decodeSec
 		}
-		stats := fmt.Sprintf("\n--- stats ---\n  prompt tokens: %d\n  gen tokens:    %d\n  gen time:      %.2fs\n  tokens/s:      %.2f", nPrompt, nGen, genTime, tps)
+		promptTps := float64(0)
+		if prefillSec > 0 {
+			promptTps = float64(nPrompt) / prefillSec
+		}
+		stats := fmt.Sprintf("\n--- stats ---\n  prompt tokens: %d\n  gen tokens:    %d\n  prefill:       %.2fs (%.1f t/s)\n  decode:        %.2fs (%.1f t/s)\n  total:         %.2fs", nPrompt, nGen, prefillSec, promptTps, decodeSec, tps, totalTime)
 		return &object.String{Value: result + stats}
 	}
 
@@ -1101,9 +1107,9 @@ func fnClearSession(ctx context.Context, kwargs object.Kwargs, args ...object.Ob
 		return errors.NewTypeError("STRING", args[1].Type().String())
 	}
 
-	globalModelCache.mu.Lock()
-	globalModelCache.clearSession(modelPath.Value, sessionID.Value)
-	globalModelCache.mu.Unlock()
+	globalModelCacheF32.mu.Lock()
+	globalModelCacheF32.clearSession(modelPath.Value, sessionID.Value)
+	globalModelCacheF32.mu.Unlock()
 
 	return object.NewBoolean(true)
 }
