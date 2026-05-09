@@ -62,6 +62,7 @@ type InferenceModelF32 struct {
 	ropeFreqs  []float32
 	ropeHalfDim int
 	bufs       blockBuffers
+	xDataBuf   []float32
 	PrefillMs  float64
 	DecodeMs   float64
 }
@@ -943,4 +944,16 @@ func f32ToF64(in []float32) []float64 {
 		out[i] = float64(v)
 	}
 	return out
+}
+
+func argmaxF32(v []float32) int {
+	best := 0
+	bv := v[0]
+	for i := 1; i < len(v); i++ {
+		if v[i] > bv {
+			bv = v[i]
+			best = i
+		}
+	}
+	return best
 }

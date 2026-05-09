@@ -375,7 +375,8 @@ func (m *InferenceModelF32) Forward(tokenIDs []int, startPos int) []float32 {
 	seqLen := len(tokenIDs)
 	dModel := m.Config.DModel
 
-	xData := make([]float32, seqLen*dModel)
+	m.xDataBuf = growSlice(m.xDataBuf, seqLen*dModel)
+	xData := m.xDataBuf[:seqLen*dModel]
 	for i, tid := range tokenIDs {
 		if tid < m.EmbRows {
 			copy(xData[i*dModel:], m.TokenEmb[tid*m.EmbCols:tid*m.EmbCols+dModel])
@@ -397,7 +398,6 @@ func (m *InferenceModelF32) forwardBlock(blockIdx int, xData []float32, seqLen, 
 	b := &m.bufs
 
 	b.normed = growSlice(b.normed, seqLen*dModel)
-	zeroSlice(b.normed)
 	rmsNormFlatF32(xData, block.AttnNormW, eps, seqLen, dModel, b.normed)
 
 	qData, qRows, qCols := modelMatmulIntoF32(block.WQ, b.normed, seqLen, dModel, b.qData)
@@ -462,7 +462,6 @@ func (m *InferenceModelF32) forwardBlock(blockIdx int, xData []float32, seqLen, 
 	}
 
 	b.ffnNormed = growSlice(b.ffnNormed, seqLen*dModel)
-	zeroSlice(b.ffnNormed)
 	rmsNormFlatF32(xData, block.FFNNormW, eps, seqLen, dModel, b.ffnNormed)
 
 	gateData, gateRows, gateCols := modelMatmulIntoF32(block.WGate, b.ffnNormed, seqLen, dModel, b.gateData)
@@ -545,17 +544,26 @@ func (m *InferenceModelF32) Generate(prompt string, maxTokens int, strategy stri
 	logitsF32 := m.Forward(context, kvStartPos)
 	tPrefillEnd := time.Now()
 	m.PrefillMs = tPrefillEnd.Sub(tGenStart).Seconds() * 1000
-	logits := f32ToF64(logitsF32)
 
-	recent := make([]int64, len(tokenIDs))
-	for i, id := range tokenIDs {
-		recent[i] = int64(id)
+	var recent []int64
+	var nextID int
+	if strategy == "greedy" {
+		nextID = argmaxF32(logitsF32)
+		recent = make([]int64, len(tokenIDs))
+		for i, id := range tokenIDs {
+			recent[i] = int64(id)
+		}
+	} else {
+		logits := f32ToF64(logitsF32)
+		recent = make([]int64, len(tokenIDs))
+		for i, id := range tokenIDs {
+			recent[i] = int64(id)
+		}
+		if repeatPenalty > 0 && len(recent) > 0 {
+			applyRepeatPenalty(logits, recent, repeatPenalty, repeatLastN)
+		}
+		nextID = sampleLogits(logits, strategy, temperature, topK, topP)
 	}
-
-	if repeatPenalty > 0 && len(recent) > 0 {
-		applyRepeatPenalty(logits, recent, repeatPenalty, repeatLastN)
-	}
-	nextID := sampleLogits(logits, strategy, temperature, topK, topP)
 
 	tokenIDs = append(tokenIDs, nextID)
 	recent = append(recent, int64(nextID))
@@ -570,12 +578,16 @@ func (m *InferenceModelF32) Generate(prompt string, maxTokens int, strategy stri
 		pos := kvStartPos + nPrompt + step - 1
 
 		logitsF32 = m.Forward([]int{nextID}, pos)
-		logits = f32ToF64(logitsF32)
 
-		if repeatPenalty > 0 && len(recent) > 0 {
-			applyRepeatPenalty(logits, recent, repeatPenalty, repeatLastN)
+		if strategy == "greedy" {
+			nextID = argmaxF32(logitsF32)
+		} else {
+			logits := f32ToF64(logitsF32)
+			if repeatPenalty > 0 && len(recent) > 0 {
+				applyRepeatPenalty(logits, recent, repeatPenalty, repeatLastN)
+			}
+			nextID = sampleLogits(logits, strategy, temperature, topK, topP)
 		}
-		nextID = sampleLogits(logits, strategy, temperature, topK, topP)
 
 		tokenIDs = append(tokenIDs, nextID)
 		recent = append(recent, int64(nextID))

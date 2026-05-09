@@ -242,10 +242,18 @@ func BenchmarkForwardSingleTokenF64_1_7B(b *testing.B) {
 
 func BenchmarkGenerateF32_1_7B(b *testing.B) {
 	model := loadBenchModelF32ByName(b, "models/SmolLM2-1.7B-Instruct-Q8_0.gguf")
+	model.initKVCaches()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		model.initKVCaches()
-		_, _, _, _ = model.Generate("Hello", 10, "greedy", 0, 0, 0, 0, 0, "", "", 0)
+		m := *model
+		m.KVCaches = make([]KVCacheF32, len(model.KVCaches))
+		for j := range m.KVCaches {
+			m.KVCaches[j] = KVCacheF32{
+				K: make([][]float32, model.nKVHeads),
+				V: make([][]float32, model.nKVHeads),
+			}
+		}
+		_, _, _, _ = m.Generate("Hello", 10, "greedy", 0, 0, 0, 0, 0, "", "", 0)
 	}
 }
 
