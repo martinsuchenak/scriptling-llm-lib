@@ -314,6 +314,24 @@ func BenchmarkAllocsF64(b *testing.B) {
 	}
 }
 
+func BenchmarkLoadF32_135M(b *testing.B) {
+	path := "models/SmolLM2-135M-Instruct-Q8_0.gguf"
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		b.Skip("model file not found")
+	}
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		gguf, err := LoadGGUF(path)
+		if err != nil {
+			b.Fatal(err)
+		}
+		_, err = buildInferenceModelF32(gguf, path)
+		if err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
 func init() {
 	_ = fmt.Sprintf("")
 }

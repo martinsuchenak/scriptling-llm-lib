@@ -41,6 +41,8 @@ func (c *modelCacheF32) getOrLoad(path string) (*InferenceModelF32, error) {
 		return nil, err
 	}
 
+	gguf.ReleaseFileData()
+
 	c.models[path] = model
 	return model, nil
 }
@@ -102,100 +104,79 @@ func buildInferenceModelF32(gguf *GGUFModel, path string) (*InferenceModelF32, e
 	cfg := gguf.Config
 	gguf.Metadata["_path"] = path
 
-	tokenEmbF32, embRows, embCols, err := loadTensorF32(gguf, "token_embedding.weight")
+	tokenEmbF32, embRows, embCols, err := gguf.loadTensor2DF32("token_embedding.weight")
 	if err != nil {
 		return nil, fmt.Errorf("model: loading token_embedding: %w", err)
 	}
 
-	finalNormF32, err := loadTensor1DF32(gguf, "final_norm.weight")
+	finalNormF32, err := gguf.loadTensor1DF32("final_norm.weight")
 	if err != nil {
 		return nil, fmt.Errorf("model: loading final_norm: %w", err)
 	}
 
-	var outputWIface interface{}
-	outputWIface, err = gguf.LoadTensor("output.weight")
-	if err != nil {
-		outputWIface = nil
-	}
-
 	var outputW interface{}
-
-	if outputWIface != nil {
-		switch w := outputWIface.(type) {
-		case *QuantWeight:
-			outputW = w
-		case [][]float64:
-			qw := quantizeQ8Rows(w)
+	outputIface, err := gguf.loadWeightF32Direct("output.weight")
+	if err != nil || outputIface == nil {
+		if embCols%32 == 0 {
+			qw := quantizeQ8RowsF32(tokenEmbF32, embRows, embCols)
 			if qw != nil {
 				outputW = qw
 			} else {
-				outputW = flattenF64ToF32(w)
+				outputW = tokenEmbF32
 			}
-		default:
-			outputWIface = nil
-		}
-	}
-
-	if outputWIface == nil {
-		emb2D := make([][]float64, embRows)
-		for i := 0; i < embRows; i++ {
-			row := make([]float64, embCols)
-			for j := 0; j < embCols; j++ {
-				row[j] = float64(tokenEmbF32[i*embCols+j])
-			}
-			emb2D[i] = row
-		}
-		qw := quantizeQ8Rows(emb2D)
-		if qw != nil {
-			outputW = qw
 		} else {
 			outputW = tokenEmbF32
 		}
+	} else {
+		outputW = outputIface
 	}
 
 	blocks := make([]TransformerBlockF32, cfg.NLayers)
 	for i := 0; i < cfg.NLayers; i++ {
 		prefix := fmt.Sprintf("blocks.%d.", i)
 
-		attnNormF32, err := loadTensor1DF32(gguf, prefix+"attn_norm.weight")
+		attnNormF32, err := gguf.loadTensor1DF32(prefix + "attn_norm.weight")
 		if err != nil {
 			return nil, fmt.Errorf("model: loading %s: %w", prefix+"attn_norm.weight", err)
 		}
 
-		wq, err := loadWeightF32(gguf, prefix+"attn.w_q.weight")
+		wq, err := gguf.loadWeightF32Direct(prefix + "attn.w_q.weight")
 		if err != nil {
 			return nil, fmt.Errorf("model: loading %s: %w", prefix+"attn.w_q.weight", err)
 		}
-		wk, err := loadWeightF32(gguf, prefix+"attn.w_k.weight")
+		wk, err := gguf.loadWeightF32Direct(prefix + "attn.w_k.weight")
 		if err != nil {
 			return nil, fmt.Errorf("model: loading %s: %w", prefix+"attn.w_k.weight", err)
 		}
-		wv, err := loadWeightF32(gguf, prefix+"attn.w_v.weight")
+		wv, err := gguf.loadWeightF32Direct(prefix + "attn.w_v.weight")
 		if err != nil {
 			return nil, fmt.Errorf("model: loading %s: %w", prefix+"attn.w_v.weight", err)
 		}
-		wo, err := loadWeightF32(gguf, prefix+"attn.w_o.weight")
+		wo, err := gguf.loadWeightF32Direct(prefix + "attn.w_o.weight")
 		if err != nil {
 			return nil, fmt.Errorf("model: loading %s: %w", prefix+"attn.w_o.weight", err)
 		}
 
-		ffnNormF32, err := loadTensor1DF32(gguf, prefix+"ffn_norm.weight")
+		ffnNormF32, err := gguf.loadTensor1DF32(prefix + "ffn_norm.weight")
 		if err != nil {
 			return nil, fmt.Errorf("model: loading %s: %w", prefix+"ffn_norm.weight", err)
 		}
 
-		wGate, err := loadWeightF32(gguf, prefix+"ffn.w_gate.weight")
+		wGate, err := gguf.loadWeightF32Direct(prefix + "ffn.w_gate.weight")
 		if err != nil {
 			return nil, fmt.Errorf("model: loading %s: %w", prefix+"ffn.w_gate.weight", err)
 		}
-		wUp, err := loadWeightF32(gguf, prefix+"ffn.w_up.weight")
+		wUp, err := gguf.loadWeightF32Direct(prefix + "ffn.w_up.weight")
 		if err != nil {
 			return nil, fmt.Errorf("model: loading %s: %w", prefix+"ffn.w_up.weight", err)
 		}
-		wDown, err := loadWeightF32(gguf, prefix+"ffn.w_down.weight")
+		wDown, err := gguf.loadWeightF32Direct(prefix + "ffn.w_down.weight")
 		if err != nil {
 			return nil, fmt.Errorf("model: loading %s: %w", prefix+"ffn.w_down.weight", err)
 		}
+
+		qNormW, _ := gguf.loadTensor1DF32(prefix + "attn_q_norm.weight")
+		kNormW, _ := gguf.loadTensor1DF32(prefix + "attn_k_norm.weight")
 
 		blocks[i] = TransformerBlockF32{
 			AttnNormW: attnNormF32,
@@ -203,8 +184,8 @@ func buildInferenceModelF32(gguf *GGUFModel, path string) (*InferenceModelF32, e
 			WK:        wk,
 			WV:        wv,
 			WO:        wo,
-			QNormW:    loadOptional1DF32(gguf, prefix+"attn_q_norm.weight"),
-			KNormW:    loadOptional1DF32(gguf, prefix+"attn_k_norm.weight"),
+			QNormW:    qNormW,
+			KNormW:    kNormW,
 			FFNNormW:  ffnNormF32,
 			WGate:     wGate,
 			WUp:       wUp,
@@ -286,60 +267,6 @@ func flattenF64ToF32(m [][]float64) []float32 {
 		}
 	}
 	return flat
-}
-
-func loadWeightF32(gguf *GGUFModel, name string) (interface{}, error) {
-	iface, err := gguf.LoadTensor(name)
-	if err != nil {
-		return nil, err
-	}
-	switch w := iface.(type) {
-	case *QuantWeight:
-		return w, nil
-	case [][]float64:
-		return flattenF64ToF32(w), nil
-	}
-	return nil, nil
-}
-
-func loadTensor1DF32(gguf *GGUFModel, name string) ([]float32, error) {
-	iface, err := gguf.LoadTensor(name)
-	if err != nil {
-		return nil, err
-	}
-	switch w := iface.(type) {
-	case []float64:
-		return f64ToF32(w), nil
-	}
-	return nil, fmt.Errorf("model: %s must be 1D", name)
-}
-
-func loadOptional1DF32(gguf *GGUFModel, name string) []float32 {
-	iface, err := gguf.LoadTensor(name)
-	if err != nil {
-		return nil
-	}
-	if f, ok := iface.([]float64); ok {
-		return f64ToF32(f)
-	}
-	return nil
-}
-
-func loadTensorF32(gguf *GGUFModel, name string) ([]float32, int, int, error) {
-	iface, err := gguf.LoadTensor(name)
-	if err != nil {
-		return nil, 0, 0, err
-	}
-	switch w := iface.(type) {
-	case [][]float64:
-		rows := len(w)
-		cols := 0
-		if rows > 0 {
-			cols = len(w[0])
-		}
-		return flattenF64ToF32(w), rows, cols, nil
-	}
-	return nil, 0, 0, fmt.Errorf("model: %s must be 2D", name)
 }
 
 func (m *InferenceModelF32) initKVCaches() {

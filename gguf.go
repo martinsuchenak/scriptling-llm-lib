@@ -38,6 +38,7 @@ type GGUFModel struct {
 	Tokenizer  *TokenizerData
 	File       *os.File
 	DataOffset int64
+	fileData   []byte
 }
 
 type ModelConfig struct {
@@ -632,11 +633,14 @@ func LoadGGUF(path string) (*GGUFModel, error) {
 		Config:     config,
 		Tokenizer:  tokenizerData,
 		DataOffset: int64(dataStart),
+		fileData:   fileData,
 	}
 
-	_ = fileData
-
 	return gguf, nil
+}
+
+func (g *GGUFModel) ReleaseFileData() {
+	g.fileData = nil
 }
 
 func (g *GGUFModel) LoadTensor(name string) (interface{}, error) {
@@ -661,9 +665,13 @@ func (g *GGUFModel) LoadTensor(name string) (interface{}, error) {
 		return [][]float64{{}}, nil
 	}
 
-	fileData, err := os.ReadFile(g.Metadata["_path"].(string))
-	if err != nil {
-		return nil, fmt.Errorf("gguf: failed to re-read file: %w", err)
+	fileData := g.fileData
+	if fileData == nil {
+		var err error
+		fileData, err = os.ReadFile(g.Metadata["_path"].(string))
+		if err != nil {
+			return nil, fmt.Errorf("gguf: failed to re-read file: %w", err)
+		}
 	}
 
 	if len(ti.Dims) == 1 {
@@ -679,6 +687,151 @@ func (g *GGUFModel) LoadTensor(name string) (interface{}, error) {
 	}
 
 	return g.loadQuantized2D(fileData, ti, actualRows, actualCols, int(nElements)), nil
+}
+
+func (g *GGUFModel) loadTensor1DF32(name string) ([]float32, error) {
+	ti, ok := g.Tensors[name]
+	if !ok {
+		return nil, fmt.Errorf("gguf: tensor %q not found", name)
+	}
+	if len(ti.Dims) == 0 || len(ti.Dims) > 1 {
+		return nil, fmt.Errorf("gguf: tensor %q is not 1D", name)
+	}
+	nElements := int(ti.Dims[0])
+	if nElements == 0 {
+		return nil, nil
+	}
+	offset := int(ti.RawOffset)
+	fileData := g.fileData
+	switch ti.Type {
+	case 0:
+		result := make([]float32, nElements)
+		for i := 0; i < nElements; i++ {
+			result[i] = math.Float32frombits(binary.LittleEndian.Uint32(fileData[offset+i*4:]))
+		}
+		return result, nil
+	case 1:
+		result := make([]float32, nElements)
+		for i := 0; i < nElements; i++ {
+			result[i] = readF16F32(fileData, offset+i*2)
+		}
+		return result, nil
+	default:
+		f64 := g.dequantize1D(fileData, ti, nElements)
+		return f64ToF32(f64), nil
+	}
+}
+
+func (g *GGUFModel) loadTensor2DF32(name string) ([]float32, int, int, error) {
+	ti, ok := g.Tensors[name]
+	if !ok {
+		return nil, 0, 0, fmt.Errorf("gguf: tensor %q not found", name)
+	}
+	if len(ti.Dims) != 2 {
+		return nil, 0, 0, fmt.Errorf("gguf: tensor %q is not 2D", name)
+	}
+	rows := int(ti.Dims[1])
+	cols := int(ti.Dims[0])
+	nElements := rows * cols
+	if nElements == 0 {
+		return nil, 0, 0, nil
+	}
+	offset := int(ti.RawOffset)
+	fileData := g.fileData
+	switch ti.Type {
+	case 0:
+		result := make([]float32, nElements)
+		for i := 0; i < nElements; i++ {
+			result[i] = math.Float32frombits(binary.LittleEndian.Uint32(fileData[offset+i*4:]))
+		}
+		return result, rows, cols, nil
+	case 1:
+		result := make([]float32, nElements)
+		for i := 0; i < nElements; i++ {
+			result[i] = readF16F32(fileData, offset+i*2)
+		}
+		return result, rows, cols, nil
+	default:
+		f64 := g.dequantize1D(fileData, ti, nElements)
+		return f64ToF32(f64), rows, cols, nil
+	}
+}
+
+func (g *GGUFModel) loadWeightF32Direct(name string) (interface{}, error) {
+	ti, ok := g.Tensors[name]
+	if !ok {
+		return nil, fmt.Errorf("gguf: tensor %q not found", name)
+	}
+	if len(ti.Dims) != 2 {
+		return nil, fmt.Errorf("gguf: tensor %q is not 2D", name)
+	}
+	rows := int(ti.Dims[1])
+	cols := int(ti.Dims[0])
+	nElements := rows * cols
+	if nElements == 0 {
+		return nil, nil
+	}
+	offset := int(ti.RawOffset)
+	fileData := g.fileData
+
+	switch ti.Type {
+	case 8:
+		groupSize := 32
+		groupsPerRow := cols / groupSize
+		nGroups := nElements / groupSize
+		totalBytes := nGroups * 34
+		raw := make([]byte, totalBytes)
+		copy(raw, fileData[offset:offset+totalBytes])
+		return &QuantWeight{QType: "q8", Raw: raw, Groups: groupsPerRow, Rows: rows, Cols: cols}, nil
+	case 2:
+		groupSize := 32
+		groupsPerRow := cols / groupSize
+		nGroups := nElements / groupSize
+		totalBytes := nGroups * 18
+		raw := make([]byte, totalBytes)
+		copy(raw, fileData[offset:offset+totalBytes])
+		return &QuantWeight{QType: "q4", Raw: raw, Groups: groupsPerRow, Rows: rows, Cols: cols}, nil
+	case 3:
+		groupSize := 32
+		groupsPerRow := cols / groupSize
+		nGroups := nElements / groupSize
+		totalBytes := nGroups * 20
+		raw := make([]byte, totalBytes)
+		copy(raw, fileData[offset:offset+totalBytes])
+		return &QuantWeight{QType: "q4_1", Raw: raw, Groups: groupsPerRow, Rows: rows, Cols: cols}, nil
+	case 6:
+		groupSize := 32
+		groupsPerRow := cols / groupSize
+		nGroups := nElements / groupSize
+		totalBytes := nGroups * 22
+		raw := make([]byte, totalBytes)
+		copy(raw, fileData[offset:offset+totalBytes])
+		return &QuantWeight{QType: "q5", Raw: raw, Groups: groupsPerRow, Rows: rows, Cols: cols}, nil
+	case 12:
+		if cols >= 256 {
+			blocksPerRow := cols / 256
+			nBlocks := nElements / 256
+			totalBytes := nBlocks * 144
+			raw := make([]byte, totalBytes)
+			copy(raw, fileData[offset:offset+totalBytes])
+			return &QuantWeight{QType: "q4k", Raw: raw, Groups: blocksPerRow, Rows: rows, Cols: cols}, nil
+		}
+	case 14:
+		if cols >= 256 {
+			blocksPerRow := cols / 256
+			nBlocks := nElements / 256
+			totalBytes := nBlocks * 210
+			raw := make([]byte, totalBytes)
+			copy(raw, fileData[offset:offset+totalBytes])
+			return &QuantWeight{QType: "q6k", Raw: raw, Groups: blocksPerRow, Rows: rows, Cols: cols}, nil
+		}
+	}
+
+	f32, _, _, err := g.loadTensor2DF32(name)
+	if err != nil {
+		return nil, err
+	}
+	return f32, nil
 }
 
 func (g *GGUFModel) dequantize1D(fileData []byte, ti *tensorInfo, nElements int) []float64 {
@@ -829,6 +982,58 @@ func quantizeQ8Rows(matrix [][]float64) *QuantWeight {
 				if row[base+i]*invScale > 127 {
 					q = 127
 				} else if row[base+i]*invScale < -128 {
+					q = -128
+				}
+				raw = append(raw, byte(q))
+			}
+		}
+	}
+
+	return &QuantWeight{
+		QType:  "q8",
+		Raw:    raw,
+		Groups: groupsPerRow,
+		Rows:   rows,
+		Cols:   cols,
+	}
+}
+
+func quantizeQ8RowsF32(flat []float32, rows, cols int) *QuantWeight {
+	if cols%32 != 0 || len(flat) == 0 {
+		return nil
+	}
+	groupsPerRow := cols / 32
+	totalGroups := rows * groupsPerRow
+	raw := make([]byte, 0, totalGroups*34)
+
+	for r := 0; r < rows; r++ {
+		rowOff := r * cols
+		for g := 0; g < groupsPerRow; g++ {
+			base := rowOff + g*32
+			var maxAbs float32
+			for i := 0; i < 32; i++ {
+				v := flat[base+i]
+				if v < 0 {
+					v = -v
+				}
+				if v > maxAbs {
+					maxAbs = v
+				}
+			}
+			var scale float32
+			if maxAbs > 0 {
+				scale = maxAbs / 127.0
+			}
+			scaleBits := float64ToFloat16(float64(scale))
+			var scaleBytes [2]byte
+			binary.LittleEndian.PutUint16(scaleBytes[:], scaleBits)
+			raw = append(raw, scaleBytes[:]...)
+			invScale := float32(1.0) / scale
+			for i := 0; i < 32; i++ {
+				q := int8(flat[base+i] * invScale)
+				if flat[base+i]*invScale > 127 {
+					q = 127
+				} else if flat[base+i]*invScale < -128 {
 					q = -128
 				}
 				raw = append(raw, byte(q))
