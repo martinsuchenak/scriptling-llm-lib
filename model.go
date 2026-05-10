@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"math"
-	"sync"
 	"time"
 
 	"github.com/paularlott/scriptling/errors"
@@ -36,14 +35,8 @@ type sessionEntry struct {
 }
 
 type modelCache struct {
-	mu       sync.Mutex
 	models   map[string]*InferenceModel
 	sessions map[string]map[string]*sessionEntry
-}
-
-var globalModelCache = &modelCache{
-	models:   make(map[string]*InferenceModel),
-	sessions: make(map[string]map[string]*sessionEntry),
 }
 
 type InferenceModel struct {

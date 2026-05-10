@@ -47,27 +47,27 @@ type blockBuffers struct {
 }
 
 type InferenceModelF32 struct {
-	Config     ModelConfig
-	Arch       string
-	TokenEmb   []float32
-	EmbRows    int
-	EmbCols    int
-	Blocks     []TransformerBlockF32
-	FinalNormW []float32
-	OutputW    interface{}
-	KVCaches   []KVCacheF32
-	Tokenizer  *Tokenizer
-	ChatTpl    string
-	nHeads     int
-	nKVHeads   int
-	dK         int
-	nRep       int
-	ropeFreqs  []float32
+	Config      ModelConfig
+	Arch        string
+	TokenEmb    []float32
+	EmbRows     int
+	EmbCols     int
+	Blocks      []TransformerBlockF32
+	FinalNormW  []float32
+	OutputW     interface{}
+	KVCaches    []KVCacheF32
+	Tokenizer   *Tokenizer
+	ChatTpl     string
+	nHeads      int
+	nKVHeads    int
+	dK          int
+	nRep        int
+	ropeFreqs   []float32
 	ropeHalfDim int
-	bufs       blockBuffers
-	xDataBuf   []float32
-	PrefillMs  float64
-	DecodeMs   float64
+	bufs        blockBuffers
+	xDataBuf    []float32
+	PrefillMs   float64
+	DecodeMs    float64
 }
 
 func growSlice(b []float32, n int) []float32 {
@@ -122,15 +122,6 @@ func matmulAlloc(n int) []float32 {
 
 type f32BufPool struct {
 	pool sync.Pool
-}
-
-var bufPool = f32BufPool{
-	pool: sync.Pool{
-		New: func() interface{} {
-			b := make([]float32, 0, 8192)
-			return &b
-		},
-	},
 }
 
 func (p *f32BufPool) get(n int) []float32 {
@@ -366,16 +357,6 @@ func q5DotGroupXF32(raw []byte, rawOff int, xData []float32, xBase int) float32 
 		sum += v0_3*xData[xBase+j+3] + v1_3*xData[xBase+j+19]
 	}
 	return s * sum
-}
-
-func modelMatmulF32(w interface{}, xData []float32, xRows, xCols int) ([]float32, int, int) {
-	switch wt := w.(type) {
-	case *QuantWeight:
-		return modelMatmulQuantF32(wt, xData, xRows, xCols)
-	case []float32:
-		return modelMatmulFloatF32(wt, xData, xRows, xCols)
-	}
-	return nil, 0, 0
 }
 
 func modelMatmulIntoF32(w interface{}, xData []float32, xRows, xCols int, dst []float32) ([]float32, int, int) {

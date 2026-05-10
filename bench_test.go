@@ -22,12 +22,6 @@ func loadBenchModel(b *testing.B, path string) *InferenceModelF32 {
 	return model
 }
 
-func benchPrefill(b *testing.B, model *InferenceModelF32, prompt string) {
-	ids := model.Tokenizer.Encode(prompt)
-	model.initKVCaches()
-	model.Forward(ids, 0)
-}
-
 func BenchmarkGenerate135M(b *testing.B) {
 	model := loadBenchModel(b, "models/SmolLM2-135M-Instruct-Q8_0.gguf")
 	model.initKVCaches()

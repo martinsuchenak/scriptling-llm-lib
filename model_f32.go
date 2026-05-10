@@ -263,16 +263,6 @@ func buildInferenceModelF32(gguf *GGUFModel, path string) (*InferenceModelF32, e
 	}, nil
 }
 
-func coalesceOutputWeight(f32Weight []float32, qw *QuantWeight) interface{} {
-	if qw != nil {
-		return qw
-	}
-	if f32Weight != nil {
-		return f32Weight
-	}
-	return nil
-}
-
 func flattenF64ToF32(m [][]float64) []float32 {
 	if len(m) == 0 {
 		return nil

@@ -201,7 +201,7 @@ func (c *jctx) execIf(header string, tokens []jtoken, start, endifIdx int, buf *
 	cond := strings.TrimSpace(strings.TrimPrefix(header, "if "))
 
 	type branch struct {
-		cond      string
+		cond       string
 		start, end int
 	}
 	var branches []branch
@@ -629,9 +629,10 @@ func findLogicalOp(expr string, op string) int {
 func balancedParens(s string) bool {
 	depth := 0
 	for _, ch := range s {
-		if ch == '(' {
+		switch ch {
+		case '(':
 			depth++
-		} else if ch == ')' {
+		case ')':
 			if depth == 0 {
 				return false
 			}
