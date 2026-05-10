@@ -1,6 +1,7 @@
 package scriptlingllmlib
 
 import (
+	"fmt"
 	"math"
 	"regexp"
 	"sort"
@@ -15,6 +16,7 @@ type Tokenizer struct {
 	Special     map[string]int
 	EOSID       int
 	IsSP        bool
+	IsSPUnicode bool
 	IsGPT2Byte  bool
 	ByteEncoder map[int]rune
 	ByteDecoder map[rune]int
@@ -55,15 +57,27 @@ func NewTokenizer(vocab map[string]int, merges [][2]string, special map[string]i
 
 	t.IsSP = false
 	t.IsGPT2Byte = false
+	t.IsSPUnicode = false
+	hasSP := false
+	hasGPT2 := false
 	for k := range vocab {
 		if len(k) > 1 && k[0] == ' ' {
 			t.IsSP = true
 			break
 		}
-		if strings.Contains(k, "Ġ") {
-			t.IsGPT2Byte = true
-			break
+		if strings.HasPrefix(k, "▁") {
+			hasSP = true
 		}
+		if strings.Contains(k, "Ġ") {
+			hasGPT2 = true
+		}
+	}
+	if !t.IsSP && hasSP {
+		t.IsSP = true
+		t.IsSPUnicode = true
+	}
+	if !t.IsSP && hasGPT2 {
+		t.IsGPT2Byte = true
 	}
 
 	t.pattern = regexp.MustCompile(`'(?:s|t|re|ve|m|ll|d)| ?[a-zA-Z]+| ?[0-9]+| ?[^\s\w]+|\s+`)
@@ -168,24 +182,63 @@ func (t *Tokenizer) encodeText(text string) []int {
 
 func (t *Tokenizer) encodeSentencepiece(text string) []int {
 	text = " " + text
+	if t.IsSPUnicode {
+		text = strings.ReplaceAll(text, " ", "▁")
+	}
 	if id, ok := t.TokenToID[text]; ok {
 		return []int{id}
 	}
 
-	symbols := make([]string, utf8.RuneCountInString(text))
-	i := 0
-	for _, r := range text {
-		symbols[i] = string(r)
-		i++
-	}
-	symbols = t.bpe(symbols)
+	if len(t.MergeRank) > 0 {
+		symbols := make([]string, utf8.RuneCountInString(text))
+		i := 0
+		for _, r := range text {
+			symbols[i] = string(r)
+			i++
+		}
+		symbols = t.bpe(symbols)
 
-	ids := make([]int, len(symbols))
-	for i, s := range symbols {
-		if id, ok := t.TokenToID[s]; ok {
-			ids[i] = id
+		ids := make([]int, len(symbols))
+		for i, s := range symbols {
+			if id, ok := t.TokenToID[s]; ok {
+				ids[i] = id
+			} else {
+				ids[i] = t.Special["<unk>"]
+			}
+		}
+		return ids
+	}
+
+	return t.encodeSentencepieceGreedy(text)
+}
+
+func (t *Tokenizer) encodeSentencepieceGreedy(text string) []int {
+	var ids []int
+	pos := 0
+	runes := []rune(text)
+	for pos < len(runes) {
+		bestLen := 0
+		bestID := -1
+		for end := min(len(runes), pos+64); end > pos; end-- {
+			candidate := string(runes[pos:end])
+			if id, ok := t.TokenToID[candidate]; ok {
+				bestLen = end - pos
+				bestID = id
+				break
+			}
+		}
+		if bestLen > 0 {
+			ids = append(ids, bestID)
+			pos += bestLen
 		} else {
-			ids[i] = t.Special["<unk>"]
+			ch := runes[pos]
+			hexTok := fmt.Sprintf("<0x%02X>", ch)
+			if id, ok := t.TokenToID[hexTok]; ok {
+				ids = append(ids, id)
+			} else if id, ok := t.Special["<unk>"]; ok {
+				ids = append(ids, id)
+			}
+			pos++
 		}
 	}
 	return ids

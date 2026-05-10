@@ -449,9 +449,16 @@ func (m *InferenceModelF32) Generate(prompt string, maxTokens int, strategy stri
 			}
 		} else if m.ChatTpl != "" {
 			prompt = applyChatTemplate(m.ChatTpl, prompt, systemPrompt, m.Arch)
+		} else {
+			tpl := defaultTemplates["chatml"]
+			prompt = applyChatTemplate(tpl, prompt, systemPrompt, m.Arch)
 		}
 	} else {
-		prompt = "<|im_end|>\n<|im_start|>user\n" + prompt + "<|im_end|>\n<|im_start|>assistant\n"
+		if m.ChatTpl != "" {
+			prompt = applyContinuation(m.ChatTpl, prompt, m.Arch)
+		} else {
+			prompt = "<|im_end|>\n<|im_start|>user\n" + prompt + "<|im_end|>\n<|im_start|>assistant\n"
+		}
 	}
 
 	tokenIDs := m.Tokenizer.Encode(prompt)
