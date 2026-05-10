@@ -135,6 +135,161 @@ func TestPartialNthElement(t *testing.T) {
 	}
 }
 
+func TestSampleTopKStrategy(t *testing.T) {
+	result := fnSample(ctx, noopKwargs, floatList(0.1, 0.9, 0.3), &object.String{Value: "top_k"}, &object.Float{Value: 1.0}, object.NewInteger(2))
+	idx := evalInt(t, result)
+	if idx < 0 || idx > 2 {
+		t.Errorf("top_k idx = %d, out of range [0,2]", idx)
+	}
+}
+
+func TestSampleTopKStrategyDefaultK(t *testing.T) {
+	result := fnSample(ctx, noopKwargs, floatList(0.1, 0.9, 0.3), &object.String{Value: "top_k"}, &object.Float{Value: 1.0})
+	idx := evalInt(t, result)
+	if idx < 0 || idx > 2 {
+		t.Errorf("top_k default idx = %d, out of range [0,2]", idx)
+	}
+}
+
+func TestSampleTopPStrategy(t *testing.T) {
+	result := fnSample(ctx, noopKwargs, floatList(0.1, 0.9, 0.3), &object.String{Value: "top_p"}, &object.Float{Value: 1.0})
+	idx := evalInt(t, result)
+	if idx < 0 || idx > 2 {
+		t.Errorf("top_p idx = %d, out of range [0,2]", idx)
+	}
+}
+
+func TestSampleTemperatureKwarg(t *testing.T) {
+	kwargs := object.NewKwargs(map[string]object.Object{
+		"temperature": &object.Float{Value: 0.5},
+	})
+	result := fnSample(ctx, kwargs, floatList(0.1, 0.9, 0.3), &object.String{Value: "temperature"})
+	idx := evalInt(t, result)
+	if idx < 0 || idx > 2 {
+		t.Errorf("temperature kwarg idx = %d, out of range [0,2]", idx)
+	}
+}
+
+func TestSampleTemperatureKwargTypeError(t *testing.T) {
+	kwargs := object.NewKwargs(map[string]object.Object{
+		"temperature": &object.String{Value: "bad"},
+	})
+	assertError(t, fnSample(ctx, kwargs, floatList(1.0), &object.String{Value: "temperature"}), "INTEGER or FLOAT")
+}
+
+func TestSampleTemperatureKwargZero(t *testing.T) {
+	kwargs := object.NewKwargs(map[string]object.Object{
+		"temperature": &object.Float{Value: 0.0},
+	})
+	assertError(t, fnSample(ctx, kwargs, floatList(1.0), &object.String{Value: "temperature"}), "positive")
+}
+
+func TestSampleTopKKwarg(t *testing.T) {
+	kwargs := object.NewKwargs(map[string]object.Object{
+		"top_k": object.NewInteger(2),
+	})
+	result := fnSample(ctx, kwargs, floatList(0.1, 0.9, 0.3), &object.String{Value: "top_k"}, &object.Float{Value: 1.0})
+	idx := evalInt(t, result)
+	if idx < 0 || idx > 2 {
+		t.Errorf("top_k kwarg idx = %d, out of range [0,2]", idx)
+	}
+}
+
+func TestSampleTopKKwargTypeError(t *testing.T) {
+	kwargs := object.NewKwargs(map[string]object.Object{
+		"top_k": &object.String{Value: "bad"},
+	})
+	assertError(t, fnSample(ctx, kwargs, floatList(1.0), &object.String{Value: "top_k"}, &object.Float{Value: 1.0}), "INTEGER")
+}
+
+func TestSampleTopPKwarg(t *testing.T) {
+	kwargs := object.NewKwargs(map[string]object.Object{
+		"top_p": &object.Float{Value: 0.9},
+	})
+	result := fnSample(ctx, kwargs, floatList(0.1, 0.9, 0.3), &object.String{Value: "top_p"}, &object.Float{Value: 1.0})
+	idx := evalInt(t, result)
+	if idx < 0 || idx > 2 {
+		t.Errorf("top_p kwarg idx = %d, out of range [0,2]", idx)
+	}
+}
+
+func TestSampleTopPInvalidRangeZero(t *testing.T) {
+	kwargs := object.NewKwargs(map[string]object.Object{
+		"top_p": &object.Float{Value: 0.0},
+	})
+	assertError(t, fnSample(ctx, kwargs, floatList(1.0), &object.String{Value: "top_p"}), "top_p must be in")
+}
+
+func TestSampleTopPInvalidRangeOverOne(t *testing.T) {
+	kwargs := object.NewKwargs(map[string]object.Object{
+		"top_p": &object.Float{Value: 1.5},
+	})
+	assertError(t, fnSample(ctx, kwargs, floatList(1.0), &object.String{Value: "top_p"}), "top_p must be in")
+}
+
+func TestSampleTopPTypeErrorKwarg(t *testing.T) {
+	kwargs := object.NewKwargs(map[string]object.Object{
+		"top_p": &object.String{Value: "bad"},
+	})
+	assertError(t, fnSample(ctx, kwargs, floatList(1.0), &object.String{Value: "top_p"}), "INTEGER or FLOAT")
+}
+
+func TestSampleRepeatPenaltyKwarg(t *testing.T) {
+	kwargs := object.NewKwargs(map[string]object.Object{
+		"repeat_penalty": &object.Float{Value: 1.5},
+		"recent_tokens":  intList(0, 1),
+	})
+	result := fnSample(ctx, kwargs, floatList(10.0, 5.0, 3.0), &object.String{Value: "greedy"})
+	idx := evalInt(t, result)
+	if idx < 0 || idx > 2 {
+		t.Errorf("repeat penalty idx = %d, out of range [0,2]", idx)
+	}
+}
+
+func TestSampleRepeatPenaltyBelowOne(t *testing.T) {
+	kwargs := object.NewKwargs(map[string]object.Object{
+		"repeat_penalty": &object.Float{Value: 0.5},
+	})
+	assertError(t, fnSample(ctx, kwargs, floatList(1.0), &object.String{Value: "greedy"}), "repeat_penalty must be >= 1.0")
+}
+
+func TestSampleRepeatPenaltyKwargTypeError(t *testing.T) {
+	kwargs := object.NewKwargs(map[string]object.Object{
+		"repeat_penalty": &object.String{Value: "bad"},
+	})
+	assertError(t, fnSample(ctx, kwargs, floatList(1.0), &object.String{Value: "greedy"}), "INTEGER or FLOAT")
+}
+
+func TestSampleRecentTokensNonInteger(t *testing.T) {
+	kwargs := object.NewKwargs(map[string]object.Object{
+		"recent_tokens":  &object.List{Elements: []object.Object{&object.String{Value: "x"}}},
+		"repeat_penalty": &object.Float{Value: 1.5},
+	})
+	assertError(t, fnSample(ctx, kwargs, floatList(1.0), &object.String{Value: "greedy"}), "INTEGER")
+}
+
+func TestSampleRepeatLastNKwarg(t *testing.T) {
+	kwargs := object.NewKwargs(map[string]object.Object{
+		"repeat_last_n": object.NewInteger(32),
+	})
+	result := fnSample(ctx, kwargs, floatList(0.1, 0.9, 0.3), &object.String{Value: "greedy"})
+	idx := evalInt(t, result)
+	if idx != 1 {
+		t.Errorf("greedy with repeat_last_n = %d, want 1", idx)
+	}
+}
+
+func TestSampleRepeatLastNKwargTypeError(t *testing.T) {
+	kwargs := object.NewKwargs(map[string]object.Object{
+		"repeat_last_n": &object.String{Value: "bad"},
+	})
+	assertError(t, fnSample(ctx, kwargs, floatList(1.0), &object.String{Value: "greedy"}), "INTEGER")
+}
+
+func TestSampleTopKPositionalArgTypeError(t *testing.T) {
+	assertError(t, fnSample(ctx, noopKwargs, floatList(0.1, 0.9, 0.3), &object.String{Value: "top_k"}, &object.Float{Value: 1.0}, &object.String{Value: "bad"}), "INTEGER")
+}
+
 func TestPartialNthElementSingle(t *testing.T) {
 	data := []indexedFloat{{index: 0, value: 1.0}}
 	partialNthElement(data, 1)

@@ -46,28 +46,6 @@ var globalModelCache = &modelCache{
 	sessions: make(map[string]map[string]*sessionEntry),
 }
 
-func (c *modelCache) getOrLoad(path string) (*InferenceModel, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	if m, ok := c.models[path]; ok {
-		return m, nil
-	}
-
-	gguf, err := LoadGGUF(path)
-	if err != nil {
-		return nil, err
-	}
-
-	model, err := buildInferenceModel(gguf, path)
-	if err != nil {
-		return nil, err
-	}
-
-	c.models[path] = model
-	return model, nil
-}
-
 type InferenceModel struct {
 	Config      ModelConfig
 	Arch        string
@@ -112,13 +90,6 @@ func loadOptional1D(gguf *GGUFModel, name string) []float64 {
 		return nil
 	}
 	return f
-}
-
-func (c *modelCache) clearModels() {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.models = make(map[string]*InferenceModel)
-	c.sessions = make(map[string]map[string]*sessionEntry)
 }
 
 func (c *modelCache) getSession(modelPath, sessionID string) *sessionEntry {

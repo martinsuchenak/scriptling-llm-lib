@@ -77,12 +77,6 @@ func growSlice(b []float32, n int) []float32 {
 	return make([]float32, n)
 }
 
-func zeroSlice(b []float32) {
-	for i := range b {
-		b[i] = 0
-	}
-}
-
 func readF16F32(b []byte, off int) float32 {
 	u16 := binary.LittleEndian.Uint16(b[off:])
 	sign := uint32(u16&0x8000) << 16
@@ -124,10 +118,6 @@ func matmulAlloc(n int) []float32 {
 		b = b[:n]
 	}
 	return b
-}
-
-func matmulFree(b []float32) {
-	matmulPool.Put(&b)
 }
 
 type f32BufPool struct {

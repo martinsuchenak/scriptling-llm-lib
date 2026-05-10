@@ -598,6 +598,274 @@ func TestInferenceModelF32Generate(t *testing.T) {
 	t.Logf("Generated f32 (%d prompt + %d gen): %q", nPrompt, nGen, output)
 }
 
+func TestModelMatmulQuantF32Q4(t *testing.T) {
+	group := make([]byte, 18)
+	binary.LittleEndian.PutUint16(group[0:2], 0x3C00)
+	for i := 2; i < 18; i++ {
+		group[i] = 0x99
+	}
+
+	w := &QuantWeight{QType: "q4", Raw: group, Groups: 1, Rows: 1, Cols: 32}
+	xData := make([]float32, 32)
+	for i := range xData {
+		xData[i] = 1.0
+	}
+
+	result, rows, cols := modelMatmulQuantF32(w, xData, 1, 32)
+	if rows != 1 || cols != 1 {
+		t.Fatalf("shape = %dx%d, want 1x1", rows, cols)
+	}
+	if math.Abs(float64(result[0])-32.0) > 0.01 {
+		t.Errorf("matmul q4 f32 = %f, want ~32.0", result[0])
+	}
+}
+
+func TestModelMatmulQuantF32Q41(t *testing.T) {
+	group := make([]byte, 20)
+	binary.LittleEndian.PutUint16(group[0:2], 0x3C00)
+	binary.LittleEndian.PutUint16(group[2:4], 0x0000)
+	for i := 4; i < 20; i++ {
+		group[i] = 0x55
+	}
+
+	w := &QuantWeight{QType: "q4_1", Raw: group, Groups: 1, Rows: 1, Cols: 32}
+	xData := make([]float32, 32)
+	for i := range xData {
+		xData[i] = 1.0
+	}
+
+	result, rows, cols := modelMatmulQuantF32(w, xData, 1, 32)
+	if rows != 1 || cols != 1 {
+		t.Fatalf("shape = %dx%d, want 1x1", rows, cols)
+	}
+	if math.IsNaN(float64(result[0])) || math.IsInf(float64(result[0]), 0) {
+		t.Errorf("q4_1 result = %f, expected finite", result[0])
+	}
+}
+
+func TestModelMatmulQuantF32Q5(t *testing.T) {
+	group := make([]byte, 22)
+	binary.LittleEndian.PutUint16(group[0:2], 0x3C00)
+	binary.LittleEndian.PutUint32(group[2:6], 0)
+	for i := 6; i < 22; i++ {
+		group[i] = byte(i)
+	}
+
+	w := &QuantWeight{QType: "q5", Raw: group, Groups: 1, Rows: 1, Cols: 32}
+	xData := make([]float32, 32)
+	for i := range xData {
+		xData[i] = float32(i) * 0.1
+	}
+
+	result, rows, cols := modelMatmulQuantF32(w, xData, 1, 32)
+	if rows != 1 || cols != 1 {
+		t.Fatalf("shape = %dx%d, want 1x1", rows, cols)
+	}
+	if math.IsNaN(float64(result[0])) || math.IsInf(float64(result[0]), 0) {
+		t.Errorf("q5 result = %f, expected finite", result[0])
+	}
+}
+
+func TestModelMatmulQuantF32Unknown(t *testing.T) {
+	w := &QuantWeight{QType: "unknown", Raw: nil, Groups: 0, Rows: 0, Cols: 0}
+	result, rows, cols := modelMatmulQuantF32(w, []float32{1.0}, 1, 1)
+	if result != nil || rows != 0 || cols != 0 {
+		t.Errorf("unknown type should return nil, got %v %d %d", result, rows, cols)
+	}
+}
+
+func TestModelMatmulRowQuantIntoF32Q8(t *testing.T) {
+	qValues := make([]int8, 32)
+	for i := range qValues {
+		qValues[i] = 1
+	}
+	raw := makeQ80Raw(makeQ80Group(0x3C00, qValues))
+
+	w := &QuantWeight{QType: "q8", Raw: []byte(raw.Value), Groups: 1, Rows: 1, Cols: 32}
+	normed := make([]float32, 32)
+	for i := range normed {
+		normed[i] = 1.0
+	}
+	dst := make([]float32, 1)
+
+	result := modelMatmulRowQuantIntoF32(w, normed, dst)
+	if math.Abs(float64(result[0])-32.0) > 0.01 {
+		t.Errorf("q8 into = %f, want ~32.0", result[0])
+	}
+}
+
+func TestModelMatmulRowQuantIntoF32Q4(t *testing.T) {
+	group := make([]byte, 18)
+	binary.LittleEndian.PutUint16(group[0:2], 0x3C00)
+	for i := 2; i < 18; i++ {
+		group[i] = 0x99
+	}
+
+	w := &QuantWeight{QType: "q4", Raw: group, Groups: 1, Rows: 1, Cols: 32}
+	normed := make([]float32, 32)
+	for i := range normed {
+		normed[i] = 1.0
+	}
+	dst := make([]float32, 1)
+
+	result := modelMatmulRowQuantIntoF32(w, normed, dst)
+	if math.Abs(float64(result[0])-32.0) > 0.01 {
+		t.Errorf("q4 into = %f, want ~32.0", result[0])
+	}
+}
+
+func TestModelMatmulRowQuantIntoF32Q41(t *testing.T) {
+	group := make([]byte, 20)
+	binary.LittleEndian.PutUint16(group[0:2], 0x3C00)
+	binary.LittleEndian.PutUint16(group[2:4], 0x0000)
+	for i := 4; i < 20; i++ {
+		group[i] = 0x55
+	}
+
+	w := &QuantWeight{QType: "q4_1", Raw: group, Groups: 1, Rows: 1, Cols: 32}
+	normed := make([]float32, 32)
+	for i := range normed {
+		normed[i] = 1.0
+	}
+	dst := make([]float32, 1)
+
+	result := modelMatmulRowQuantIntoF32(w, normed, dst)
+	if math.IsNaN(float64(result[0])) || math.IsInf(float64(result[0]), 0) {
+		t.Errorf("q4_1 into = %f, expected finite", result[0])
+	}
+}
+
+func TestModelMatmulRowQuantIntoF32Q5(t *testing.T) {
+	group := make([]byte, 22)
+	binary.LittleEndian.PutUint16(group[0:2], 0x3C00)
+	binary.LittleEndian.PutUint32(group[2:6], 0)
+	for i := 6; i < 22; i++ {
+		group[i] = byte(i)
+	}
+
+	w := &QuantWeight{QType: "q5", Raw: group, Groups: 1, Rows: 1, Cols: 32}
+	normed := make([]float32, 32)
+	for i := range normed {
+		normed[i] = float32(i) * 0.1
+	}
+	dst := make([]float32, 1)
+
+	result := modelMatmulRowQuantIntoF32(w, normed, dst)
+	if math.IsNaN(float64(result[0])) || math.IsInf(float64(result[0]), 0) {
+		t.Errorf("q5 into = %f, expected finite", result[0])
+	}
+}
+
+func TestModelMatmulRowQuantIntoF32Unknown(t *testing.T) {
+	w := &QuantWeight{QType: "unknown", Raw: nil, Groups: 0, Rows: 0, Cols: 0}
+	dst := make([]float32, 0)
+	result := modelMatmulRowQuantIntoF32(w, []float32{}, dst)
+	if result != nil {
+		t.Errorf("unknown type should return nil, got %v", result)
+	}
+}
+
+func TestModelMatmulRowQuantF32Q4(t *testing.T) {
+	group := make([]byte, 18)
+	binary.LittleEndian.PutUint16(group[0:2], 0x3C00)
+	for i := 2; i < 18; i++ {
+		group[i] = 0x99
+	}
+
+	w := &QuantWeight{QType: "q4", Raw: group, Groups: 1, Rows: 1, Cols: 32}
+	normed := make([]float32, 32)
+	for i := range normed {
+		normed[i] = 1.0
+	}
+
+	result := modelMatmulRowQuantF32(w, normed)
+	if len(result) != 1 {
+		t.Fatalf("len = %d, want 1", len(result))
+	}
+	if math.Abs(float64(result[0])-32.0) > 0.01 {
+		t.Errorf("q4 row = %f, want ~32.0", result[0])
+	}
+}
+
+func TestModelMatmulRowQuantF32Q41(t *testing.T) {
+	group := make([]byte, 20)
+	binary.LittleEndian.PutUint16(group[0:2], 0x3C00)
+	binary.LittleEndian.PutUint16(group[2:4], 0x0000)
+	for i := 4; i < 20; i++ {
+		group[i] = 0x55
+	}
+
+	w := &QuantWeight{QType: "q4_1", Raw: group, Groups: 1, Rows: 1, Cols: 32}
+	normed := make([]float32, 32)
+	for i := range normed {
+		normed[i] = 1.0
+	}
+
+	result := modelMatmulRowQuantF32(w, normed)
+	if len(result) != 1 {
+		t.Fatalf("len = %d, want 1", len(result))
+	}
+	if math.IsNaN(float64(result[0])) || math.IsInf(float64(result[0]), 0) {
+		t.Errorf("q4_1 row = %f, expected finite", result[0])
+	}
+}
+
+func TestModelMatmulRowQuantF32Q5(t *testing.T) {
+	group := make([]byte, 22)
+	binary.LittleEndian.PutUint16(group[0:2], 0x3C00)
+	binary.LittleEndian.PutUint32(group[2:6], 0)
+	for i := 6; i < 22; i++ {
+		group[i] = byte(i)
+	}
+
+	w := &QuantWeight{QType: "q5", Raw: group, Groups: 1, Rows: 1, Cols: 32}
+	normed := make([]float32, 32)
+	for i := range normed {
+		normed[i] = float32(i) * 0.1
+	}
+
+	result := modelMatmulRowQuantF32(w, normed)
+	if len(result) != 1 {
+		t.Fatalf("len = %d, want 1", len(result))
+	}
+	if math.IsNaN(float64(result[0])) || math.IsInf(float64(result[0]), 0) {
+		t.Errorf("q5 row = %f, expected finite", result[0])
+	}
+}
+
+func TestModelMatmulRowQuantF32Unknown(t *testing.T) {
+	w := &QuantWeight{QType: "unknown", Raw: nil, Groups: 0, Rows: 0, Cols: 0}
+	result := modelMatmulRowQuantF32(w, []float32{})
+	if result != nil {
+		t.Errorf("unknown type should return nil, got %v", result)
+	}
+}
+
+func TestStripThinkTags(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{"no tags", "hello world", "hello world"},
+		{"open only", "before<think stuff", "before"},
+		{"paired", "before<think hidden</thinkafter", "beforeafter"},
+		{"multiple", "a<think x</thinkb<think y</thinkc", "abc"},
+		{"only think block", "<think hidden</think", ""},
+		{"whitespace", "  hello  ", "hello"},
+		{"think at start", "<think reasoning</thinkanswer", "answer"},
+		{"empty after strip", "<think entire thing</think", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := stripThinkTags(tt.in)
+			if got != tt.want {
+				t.Errorf("stripThinkTags(%q) = %q, want %q", tt.in, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestSessionStoreF32(t *testing.T) {
 	mc := &modelCacheF32{
 		models:   make(map[string]*InferenceModelF32),

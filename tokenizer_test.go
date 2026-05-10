@@ -225,3 +225,87 @@ func TestTokenizerDataVocabConsistency(t *testing.T) {
 		}
 	}
 }
+
+func TestEncodeSentencepieceUnicodeSP(t *testing.T) {
+	vocab := map[string]int{
+		"▁hello": 0,
+		"▁world": 1,
+		"<unk>":  2,
+	}
+	special := map[string]int{"<unk>": 2}
+	tok := NewTokenizer(vocab, nil, special)
+
+	if !tok.IsSPUnicode {
+		t.Fatal("expected IsSPUnicode=true")
+	}
+
+	ids := tok.Encode("hello")
+	if len(ids) != 1 || ids[0] != 0 {
+		t.Errorf("expected [0], got %v", ids)
+	}
+}
+
+func TestEncodeSentencepieceGreedyHexToken(t *testing.T) {
+	vocab := map[string]int{
+		"▁":      0,
+		"<0x41>": 1,
+		"<unk>":  2,
+	}
+	special := map[string]int{"<unk>": 2}
+	tok := NewTokenizer(vocab, nil, special)
+
+	ids := tok.Encode("A")
+	if len(ids) != 2 {
+		t.Fatalf("expected 2 ids, got %d: %v", len(ids), ids)
+	}
+	if ids[0] != 0 {
+		t.Errorf("id[0] = %d, want 0 (▁)", ids[0])
+	}
+	if ids[1] != 1 {
+		t.Errorf("id[1] = %d, want 1 (<0x41>)", ids[1])
+	}
+}
+
+func TestEncodeSentencepieceGreedyUnknownFallback(t *testing.T) {
+	vocab := map[string]int{
+		"▁":     0,
+		"<unk>": 1,
+	}
+	special := map[string]int{"<unk>": 1}
+	tok := NewTokenizer(vocab, nil, special)
+
+	ids := tok.Encode("Z")
+	found := false
+	for _, id := range ids {
+		if id == 1 {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected <unk> in ids, got %v", ids)
+	}
+}
+
+func TestEncodeSentencepieceBPEUnknownSymbol(t *testing.T) {
+	vocab := map[string]int{
+		"▁":     0,
+		"▁h":    1,
+		"<unk>": 2,
+	}
+	merges := [][2]string{{"▁", "h"}}
+	special := map[string]int{"<unk>": 2}
+	tok := NewTokenizer(vocab, merges, special)
+
+	ids := tok.Encode("ha")
+	hasUnk := false
+	for _, id := range ids {
+		if id == 2 {
+			hasUnk = true
+			break
+		}
+	}
+	if !hasUnk {
+		t.Errorf("expected <unk> for unknown BPE symbol, got %v", ids)
+	}
+}

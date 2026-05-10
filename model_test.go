@@ -365,3 +365,59 @@ func TestGenerateWithSessionIntegration(t *testing.T) {
 	}
 	globalModelCacheF32.mu.Unlock()
 }
+
+func TestSampleLogitsEmpty(t *testing.T) {
+	got := sampleLogits([]float64{}, "greedy", 1.0, 0, 0.9)
+	if got != 0 {
+		t.Errorf("empty -> %d, want 0", got)
+	}
+}
+
+func TestSampleLogitsGreedy(t *testing.T) {
+	got := sampleLogits([]float64{0.1, 0.9, 0.3}, "greedy", 1.0, 0, 0.9)
+	if got != 1 {
+		t.Errorf("greedy -> %d, want 1", got)
+	}
+}
+
+func TestSampleLogitsTemperature(t *testing.T) {
+	got := sampleLogits([]float64{0.1, 0.9, 0.3}, "temperature", 1.0, 0, 0.9)
+	if got < 0 || got > 2 {
+		t.Errorf("temperature -> %d, out of range [0,2]", got)
+	}
+}
+
+func TestSampleLogitsTopK(t *testing.T) {
+	got := sampleLogits([]float64{0.1, 0.9, 0.3}, "top_k", 1.0, 0, 0.9)
+	if got < 0 || got > 2 {
+		t.Errorf("top_k default -> %d, out of range [0,2]", got)
+	}
+}
+
+func TestSampleLogitsTopKExplicit(t *testing.T) {
+	got := sampleLogits([]float64{0.1, 0.9, 0.3}, "top_k", 1.0, 2, 0.9)
+	if got < 0 || got > 2 {
+		t.Errorf("top_k explicit -> %d, out of range [0,2]", got)
+	}
+}
+
+func TestSampleLogitsTopKClamp(t *testing.T) {
+	got := sampleLogits([]float64{0.1, 0.9, 0.3}, "top_k", 1.0, 100, 0.9)
+	if got < 0 || got > 2 {
+		t.Errorf("top_k clamped -> %d, out of range [0,2]", got)
+	}
+}
+
+func TestSampleLogitsTopP(t *testing.T) {
+	got := sampleLogits([]float64{0.1, 0.9, 0.3}, "top_p", 1.0, 0, 0.9)
+	if got < 0 || got > 2 {
+		t.Errorf("top_p -> %d, out of range [0,2]", got)
+	}
+}
+
+func TestSampleLogitsUnknownStrategy(t *testing.T) {
+	got := sampleLogits([]float64{0.1, 0.9}, "unknown", 1.0, 0, 0.9)
+	if got != 0 {
+		t.Errorf("unknown -> %d, want 0", got)
+	}
+}
