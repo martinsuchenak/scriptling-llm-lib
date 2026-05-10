@@ -43,7 +43,13 @@ func tokenizeJinja(tpl string) []jtoken {
 	var tokens []jtoken
 	i := 0
 	for i < len(tpl) {
-		if i+1 < len(tpl) && tpl[i] == '{' && (tpl[i+1] == '{' || tpl[i+1] == '%') {
+		if i+2 < len(tpl) && tpl[i] == '{' && tpl[i+1] == '#' {
+			end := strings.Index(tpl[i+2:], "#}")
+			if end < 0 {
+				break
+			}
+			i = i + 2 + end + 2
+		} else if i+1 < len(tpl) && tpl[i] == '{' && (tpl[i+1] == '{' || tpl[i+1] == '%') {
 			isExpr := tpl[i+1] == '{'
 			closeStr := "}}"
 			if !isExpr {
@@ -97,7 +103,7 @@ func tokenizeJinja(tpl string) []jtoken {
 		} else {
 			j := len(tpl)
 			for k := i; k+1 < len(tpl); k++ {
-				if tpl[k] == '{' && (tpl[k+1] == '{' || tpl[k+1] == '%') {
+				if tpl[k] == '{' && (tpl[k+1] == '{' || tpl[k+1] == '%' || tpl[k+1] == '#') {
 					j = k
 					break
 				}
@@ -276,7 +282,16 @@ func (c *jctx) execSet(header string) {
 		return
 	}
 
-	c.vars[varName] = c.evalStr(expr)
+	switch expr {
+	case "true":
+		c.vars[varName] = "true"
+	case "false":
+		c.vars[varName] = "false"
+	case "none":
+		c.vars[varName] = ""
+	default:
+		c.vars[varName] = c.evalStr(expr)
+	}
 }
 
 func (c *jctx) evalStr(expr string) string {
@@ -287,7 +302,7 @@ func (c *jctx) evalStr(expr string) string {
 			(expr[0] == '"' && expr[len(expr)-1] == '"')) {
 		inner := expr[1 : len(expr)-1]
 		if !containsUnquoted(inner, expr[0]) {
-			return inner
+			return unescapeJinjaStr(inner)
 		}
 	}
 
@@ -302,6 +317,46 @@ func (c *jctx) evalStr(expr string) string {
 
 	val := c.evalAtom(expr)
 	return val
+}
+
+func unescapeJinjaStr(s string) string {
+	if !strings.ContainsRune(s, '\\') {
+		return s
+	}
+	var buf strings.Builder
+	buf.Grow(len(s))
+	i := 0
+	for i < len(s) {
+		if s[i] == '\\' && i+1 < len(s) {
+			switch s[i+1] {
+			case 'n':
+				buf.WriteByte('\n')
+				i += 2
+			case 't':
+				buf.WriteByte('\t')
+				i += 2
+			case 'r':
+				buf.WriteByte('\r')
+				i += 2
+			case '\\':
+				buf.WriteByte('\\')
+				i += 2
+			case '\'':
+				buf.WriteByte('\'')
+				i += 2
+			case '"':
+				buf.WriteByte('"')
+				i += 2
+			default:
+				buf.WriteByte(s[i])
+				i++
+			}
+		} else {
+			buf.WriteByte(s[i])
+			i++
+		}
+	}
+	return buf.String()
 }
 
 func containsUnquoted(s string, quote byte) bool {
@@ -321,7 +376,7 @@ func (c *jctx) evalAtom(expr string) string {
 			(expr[0] == '"' && expr[len(expr)-1] == '"')) {
 		inner := expr[1 : len(expr)-1]
 		if !containsUnquoted(inner, expr[0]) {
-			return inner
+			return unescapeJinjaStr(inner)
 		}
 	}
 
@@ -359,7 +414,7 @@ func (c *jctx) evalAtom(expr string) string {
 func (c *jctx) evalAccess(expr string) string {
 	if bracketIdx := strings.IndexByte(expr, '['); bracketIdx >= 0 {
 		objExpr := expr[:bracketIdx]
-		keyPart := expr[bracketIdx+1:]
+		rest := expr[bracketIdx+1:]
 
 		objName := strings.TrimSpace(objExpr)
 		var obj interface{}
@@ -378,27 +433,53 @@ func (c *jctx) evalAccess(expr string) string {
 			return ""
 		}
 
-		if strings.HasPrefix(keyPart, "'") || strings.HasPrefix(keyPart, "\"") {
-			closeQuote := keyPart[0:1]
-			closeIdx := strings.Index(keyPart[1:], closeQuote)
+		var key string
+		var remaining string
+
+		if len(rest) > 0 && (rest[0] == '\'' || rest[0] == '"') {
+			closeQuote := rest[0:1]
+			closeIdx := strings.Index(rest[1:], closeQuote)
 			if closeIdx >= 0 {
-				key := keyPart[1 : closeIdx+1]
-				if m, ok := obj.(map[string]string); ok {
-					return m[key]
+				key = rest[1 : closeIdx+1]
+				afterKey := rest[closeIdx+2:]
+				if len(afterKey) > 0 && afterKey[0] == '[' {
+					remaining = afterKey
 				}
+			}
+			if m, ok := obj.(map[string]string); ok && remaining == "" {
+				return m[key]
 			}
 		} else {
-			keyPart = strings.TrimSuffix(keyPart, "]")
-			idx := 0
-			for _, ch := range keyPart {
-				if ch >= '0' && ch <= '9' {
-					idx = idx*10 + int(ch-'0')
+			closeIdx := strings.IndexByte(rest, ']')
+			if closeIdx >= 0 {
+				idxStr := rest[:closeIdx]
+				idx := 0
+				for _, ch := range idxStr {
+					if ch >= '0' && ch <= '9' {
+						idx = idx*10 + int(ch-'0')
+					}
 				}
+				if arr, ok := obj.([]map[string]string); ok {
+					if idx < len(arr) {
+						elem := arr[idx]
+						afterBracket := rest[closeIdx+1:]
+						if len(afterBracket) > 0 && afterBracket[0] == '[' {
+							return c.evalAccessChain(elem, afterBracket)
+						}
+						if len(afterBracket) > 0 && afterBracket[0] == '.' {
+							prop := afterBracket[1:]
+							return elem[prop]
+						}
+						return ""
+					}
+				}
+				return ""
 			}
-			if arr, ok := obj.([]map[string]string); ok {
-				if idx < len(arr) {
-					return ""
-				}
+		}
+
+		if key != "" {
+			if m, ok := obj.(map[string]string); ok {
+				return m[key]
 			}
 		}
 	}
@@ -446,11 +527,48 @@ func (c *jctx) evalAccess(expr string) string {
 	return ""
 }
 
+func (c *jctx) evalAccessChain(obj map[string]string, rest string) string {
+	if len(rest) == 0 || rest[0] != '[' {
+		return ""
+	}
+	rest = rest[1:]
+	if len(rest) > 0 && (rest[0] == '\'' || rest[0] == '"') {
+		closeQuote := rest[0:1]
+		closeIdx := strings.Index(rest[1:], closeQuote)
+		if closeIdx >= 0 {
+			key := rest[1 : closeIdx+1]
+			return obj[key]
+		}
+	}
+	return ""
+}
+
 func (c *jctx) evalBool(expr string) bool {
 	expr = strings.TrimSpace(expr)
 
 	if strings.HasPrefix(expr, "not ") {
-		return !c.evalBool(expr[4:])
+		rest := expr[4:]
+		if strings.HasSuffix(rest, " is defined") {
+			name := strings.TrimSpace(rest[:len(rest)-10])
+			_, ok := c.vars[name]
+			return !ok
+		}
+		return !c.evalBool(rest)
+	}
+
+	if strings.HasPrefix(expr, "(") && strings.HasSuffix(expr, ")") {
+		inner := expr[1 : len(expr)-1]
+		if balancedParens(inner) {
+			return c.evalBool(inner)
+		}
+	}
+
+	if orIdx := findLogicalOp(expr, " or "); orIdx >= 0 {
+		return c.evalBool(expr[:orIdx]) || c.evalBool(expr[orIdx+4:])
+	}
+
+	if andIdx := findLogicalOp(expr, " and "); andIdx >= 0 {
+		return c.evalBool(expr[:andIdx]) && c.evalBool(expr[andIdx+5:])
 	}
 
 	if eqIdx := findCmp(expr, "=="); eqIdx >= 0 {
@@ -465,6 +583,22 @@ func (c *jctx) evalBool(expr string) bool {
 		return left != right
 	}
 
+	if strings.HasSuffix(expr, " is not none") {
+		val := c.evalStr(strings.TrimSpace(expr[:len(expr)-11]))
+		return val != "" && val != "none"
+	}
+
+	if strings.HasSuffix(expr, " is none") {
+		val := c.evalStr(strings.TrimSpace(expr[:len(expr)-8]))
+		return val == "" || val == "none"
+	}
+
+	if strings.HasSuffix(expr, " is defined") {
+		name := strings.TrimSpace(expr[:len(expr)-10])
+		_, ok := c.vars[name]
+		return ok
+	}
+
 	val := c.evalStr(expr)
 	return val != "" && val != "false" && val != "0"
 }
@@ -476,6 +610,35 @@ func findCmp(expr string, op string) int {
 		}
 	}
 	return -1
+}
+
+func findLogicalOp(expr string, op string) int {
+	depth := 0
+	for i := 0; i <= len(expr)-len(op); i++ {
+		if expr[i] == '(' {
+			depth++
+		} else if expr[i] == ')' {
+			depth--
+		} else if depth == 0 && expr[i:i+len(op)] == op && !inQuotes(expr, i) {
+			return i
+		}
+	}
+	return -1
+}
+
+func balancedParens(s string) bool {
+	depth := 0
+	for _, ch := range s {
+		if ch == '(' {
+			depth++
+		} else if ch == ')' {
+			if depth == 0 {
+				return false
+			}
+			depth--
+		}
+	}
+	return depth == 0
 }
 
 func findPipe(expr string) int {
@@ -565,7 +728,7 @@ func applyChatTemplate(template string, prompt string, systemPrompt string, arch
 	if strings.Contains(template, "{% for ") || strings.Contains(template, "{{") {
 		if systemPrompt == "" && !strings.Contains(template, "if system_prompt") && !strings.Contains(template, "if system_message") {
 			if arch == "qwen3" {
-				systemPrompt = "You are a helpful AI assistant.\n/no_think"
+				systemPrompt = "/no_think"
 			} else {
 				systemPrompt = "You are a helpful AI assistant."
 			}

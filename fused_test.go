@@ -1,21 +1,11 @@
 package scriptlingllmlib
 
 import (
-	"encoding/binary"
 	"math"
 	"testing"
 
 	"github.com/paularlott/scriptling/object"
 )
-
-func makeQ4KBlock(d, dmin float64, scales, qs []byte) []byte {
-	block := make([]byte, 144)
-	binary.LittleEndian.PutUint16(block[0:2], float64ToFloat16(d))
-	binary.LittleEndian.PutUint16(block[2:4], float64ToFloat16(dmin))
-	copy(block[4:16], scales)
-	copy(block[16:144], qs)
-	return block
-}
 
 func TestOutputLogitsFloat(t *testing.T) {
 	x := object.NewFloatArray2D([]float64{0.5, -0.3, 0.8, 1.0, 0.0, 1.0}, 2, 3)
@@ -79,34 +69,6 @@ func TestOutputLogitsErrors(t *testing.T) {
 	assertError(t, fnOutputLogits(ctx, noopKwargs, emptyMat, normW, w), "empty")
 
 	assertError(t, fnOutputLogits(ctx, noopKwargs, x, normW, &object.Integer{Value: 42}), "unsupported weight type")
-}
-
-func TestQ4KDotBlockEquivalence(t *testing.T) {
-	scales := make([]byte, 12)
-	for i := range scales {
-		scales[i] = 1
-	}
-	qs := make([]byte, 128)
-	for i := range qs {
-		qs[i] = byte(i % 256)
-	}
-
-	block := makeQ4KBlock(2.0, 0.5, scales, qs)
-
-	x := make([]float64, 256)
-	for i := range x {
-		x[i] = float64(i%10) * 0.1
-	}
-
-	slow := q4kDotBlock(block, 0, x, 0)
-	fast := q4kDotBlockFast(block, 0, x, 0)
-
-	if math.IsNaN(slow) || math.IsInf(slow, 0) {
-		t.Fatalf("slow result = %f", slow)
-	}
-	if math.Abs(slow-fast) > 1e-6 {
-		t.Errorf("q4kDotBlockFast = %f, q4kDotBlock = %f, diff = %f", fast, slow, math.Abs(fast-slow))
-	}
 }
 
 func TestMathSqrt(t *testing.T) {

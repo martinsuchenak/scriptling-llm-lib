@@ -3,6 +3,7 @@ package scriptlingllmlib
 import (
 	"fmt"
 	"math"
+	"strings"
 	"sync"
 	"time"
 )
@@ -178,12 +179,30 @@ func buildInferenceModelF32(gguf *GGUFModel, path string) (*InferenceModelF32, e
 		qNormW, _ := gguf.loadTensor1DF32(prefix + "attn_q_norm.weight")
 		kNormW, _ := gguf.loadTensor1DF32(prefix + "attn_k_norm.weight")
 
+		var qBias, kBias, vBias []float32
+		blkPrefix := fmt.Sprintf("blk.%d.", i)
+		qBias, _ = gguf.loadTensor1DF32(blkPrefix + "attn_q.bias")
+		kBias, _ = gguf.loadTensor1DF32(blkPrefix + "attn_k.bias")
+		vBias, _ = gguf.loadTensor1DF32(blkPrefix + "attn_v.bias")
+		if qBias == nil {
+			qBias, _ = gguf.loadTensor1DF32(prefix + "attn.q.bias")
+		}
+		if kBias == nil {
+			kBias, _ = gguf.loadTensor1DF32(prefix + "attn.k.bias")
+		}
+		if vBias == nil {
+			vBias, _ = gguf.loadTensor1DF32(prefix + "attn.v.bias")
+		}
+
 		blocks[i] = TransformerBlockF32{
 			AttnNormW: attnNormF32,
 			WQ:        wq,
 			WK:        wk,
 			WV:        wv,
 			WO:        wo,
+			QBias:     qBias,
+			KBias:     kBias,
+			VBias:     vBias,
 			QNormW:    qNormW,
 			KNormW:    kNormW,
 			FFNNormW:  ffnNormF32,
@@ -333,6 +352,31 @@ func (m *InferenceModelF32) forwardBlock(blockIdx int, xData []float32, seqLen, 
 	b.kData = kData
 	vData, vRows, vCols := modelMatmulIntoF32(block.WV, b.normed, seqLen, dModel, b.vData)
 	b.vData = vData
+
+	if block.QBias != nil {
+		for s := 0; s < qRows; s++ {
+			off := s * qCols
+			for j := 0; j < len(block.QBias) && j < qCols; j++ {
+				qData[off+j] += block.QBias[j]
+			}
+		}
+	}
+	if block.KBias != nil {
+		for s := 0; s < kRows; s++ {
+			off := s * kCols
+			for j := 0; j < len(block.KBias) && j < kCols; j++ {
+				kData[off+j] += block.KBias[j]
+			}
+		}
+	}
+	if block.VBias != nil {
+		for s := 0; s < vRows; s++ {
+			off := s * vCols
+			for j := 0; j < len(block.VBias) && j < vCols; j++ {
+				vData[off+j] += block.VBias[j]
+			}
+		}
+	}
 
 	qHeads := splitHeadsDataF32(qData, qRows, qCols, m.nHeads)
 	kHeads := splitHeadsDataF32(kData, kRows, kCols, m.nKVHeads)
@@ -503,7 +547,11 @@ func (m *InferenceModelF32) Generate(prompt string, maxTokens int, strategy stri
 
 	if nextID == m.Tokenizer.EOSID {
 		finalPos := kvStartPos + nPrompt
-		return m.Tokenizer.Decode(tokenIDs[nPrompt:]), 1, nPrompt, finalPos
+		output := m.Tokenizer.Decode(tokenIDs[nPrompt:])
+		if m.Arch == "qwen3" {
+			output = stripThinkTags(output)
+		}
+		return output, 1, nPrompt, finalPos
 	}
 
 	nGen := 1
@@ -534,5 +582,25 @@ func (m *InferenceModelF32) Generate(prompt string, maxTokens int, strategy stri
 	finalPos := kvStartPos + nPrompt + nGen - 1
 	tDecodeEnd := time.Now()
 	m.DecodeMs = tDecodeEnd.Sub(tGenStart).Seconds()*1000 - m.PrefillMs
-	return m.Tokenizer.Decode(tokenIDs[nPrompt:]), nGen, nPrompt, finalPos
+	output := m.Tokenizer.Decode(tokenIDs[nPrompt:])
+	if m.Arch == "qwen3" {
+		output = stripThinkTags(output)
+	}
+	return output, nGen, nPrompt, finalPos
+}
+
+func stripThinkTags(s string) string {
+	for {
+		start := strings.Index(s, "<think")
+		if start == -1 {
+			break
+		}
+		end := strings.Index(s[start:], "</think")
+		if end == -1 {
+			s = s[:start]
+			break
+		}
+		s = s[:start] + s[start+end+len("</think"):]
+	}
+	return strings.TrimSpace(s)
 }

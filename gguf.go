@@ -10,16 +10,14 @@ import (
 const ggufMagic = 0x46554747
 
 var ggufTypeSizes = map[int]int{
-	0:  4,
-	1:  2,
-	2:  18,
-	3:  20,
-	6:  22,
-	7:  24,
-	8:  34,
-	9:  40,
-	12: 144,
-	14: 210,
+	0: 4,
+	1: 2,
+	2: 18,
+	3: 20,
+	6: 22,
+	7: 24,
+	8: 34,
+	9: 40,
 }
 
 type tensorInfo struct {
@@ -420,74 +418,6 @@ func dequantizeQ5_0Native(data []byte, offset int, nElements int) []float64 {
 	return result
 }
 
-func dequantizeQ4KNative(data []byte, offset int, nElements int) []float64 {
-	nBlocks := nElements / 256
-	result := make([]float64, nElements)
-	for b := 0; b < nBlocks; b++ {
-		base := offset + b*144
-		d := float16ToFloat64(binary.LittleEndian.Uint16(data[base:]))
-		dmin := float16ToFloat64(binary.LittleEndian.Uint16(data[base+2:]))
-		scalesOff := base + 4
-		qsOff := base + 16
-		is := 0
-		qPos := 0
-		for group := 0; group < 4; group++ {
-			sc0, m0 := getScaleMinK4(is, data[scalesOff:])
-			sc1, m1 := getScaleMinK4(is+1, data[scalesOff:])
-			d1 := d * float64(sc0)
-			m1v := dmin * float64(m0)
-			d2 := d * float64(sc1)
-			m2v := dmin * float64(m1)
-			qBase := qsOff + qPos
-			for l := 0; l < 32; l++ {
-				result[b*256+group*64+l] = d1*float64(data[qBase+l]&0xF) - m1v
-			}
-			for l := 0; l < 32; l++ {
-				result[b*256+group*64+32+l] = d2*float64(data[qBase+l]>>4) - m2v
-			}
-			qPos += 32
-			is += 2
-		}
-	}
-	return result
-}
-
-func dequantizeQ6KNative(data []byte, offset int, nElements int) []float64 {
-	nBlocks := nElements / 256
-	result := make([]float64, nElements)
-	for b := 0; b < nBlocks; b++ {
-		base := offset + b*210
-		d := float16ToFloat64(binary.LittleEndian.Uint16(data[base+208:]))
-		qlOff := base + 0
-		qhOff := base + 128
-		scalesOff := base + 192
-		outOff := b * 256
-
-		for n := 0; n < 256; n += 128 {
-			for l := 0; l < 32; l++ {
-				is := l / 16
-				q1 := int(int8((data[qlOff+l]&0xF)|((data[qhOff+l]>>0)&3)<<4)) - 32
-				q2 := int(int8((data[qlOff+l+32]&0xF)|((data[qhOff+l]>>2)&3)<<4)) - 32
-				q3 := int(int8((data[qlOff+l]>>4)|((data[qhOff+l]>>4)&3)<<4)) - 32
-				q4 := int(int8((data[qlOff+l+32]>>4)|((data[qhOff+l]>>6)&3)<<4)) - 32
-				sc0 := float64(int8(data[scalesOff+is+0]))
-				sc2 := float64(int8(data[scalesOff+is+2]))
-				sc4 := float64(int8(data[scalesOff+is+4]))
-				sc6 := float64(int8(data[scalesOff+is+6]))
-				result[outOff+l+0] = d * sc0 * float64(q1)
-				result[outOff+l+32] = d * sc2 * float64(q2)
-				result[outOff+l+64] = d * sc4 * float64(q3)
-				result[outOff+l+96] = d * sc6 * float64(q4)
-			}
-			outOff += 128
-			qlOff += 64
-			qhOff += 32
-			scalesOff += 8
-		}
-	}
-	return result
-}
-
 func LoadGGUF(path string) (*GGUFModel, error) {
 	fileData, err := os.ReadFile(path)
 	if err != nil {
@@ -807,24 +737,6 @@ func (g *GGUFModel) loadWeightF32Direct(name string) (interface{}, error) {
 		raw := make([]byte, totalBytes)
 		copy(raw, fileData[offset:offset+totalBytes])
 		return &QuantWeight{QType: "q5", Raw: raw, Groups: groupsPerRow, Rows: rows, Cols: cols}, nil
-	case 12:
-		if cols >= 256 {
-			blocksPerRow := cols / 256
-			nBlocks := nElements / 256
-			totalBytes := nBlocks * 144
-			raw := make([]byte, totalBytes)
-			copy(raw, fileData[offset:offset+totalBytes])
-			return &QuantWeight{QType: "q4k", Raw: raw, Groups: blocksPerRow, Rows: rows, Cols: cols}, nil
-		}
-	case 14:
-		if cols >= 256 {
-			blocksPerRow := cols / 256
-			nBlocks := nElements / 256
-			totalBytes := nBlocks * 210
-			raw := make([]byte, totalBytes)
-			copy(raw, fileData[offset:offset+totalBytes])
-			return &QuantWeight{QType: "q6k", Raw: raw, Groups: blocksPerRow, Rows: rows, Cols: cols}, nil
-		}
 	}
 
 	f32, _, _, err := g.loadTensor2DF32(name)
@@ -849,43 +761,55 @@ func (g *GGUFModel) dequantize1D(fileData []byte, ti *tensorInfo, nElements int)
 		return dequantizeQ5_0Native(fileData, offset, nElements)
 	case 8:
 		return dequantizeQ8_0Native(fileData, offset, nElements)
-	case 12:
-		return dequantizeQ4KNative(fileData, offset, nElements)
 	case 14:
 		return dequantizeQ6KNative(fileData, offset, nElements)
 	}
 	return make([]float64, nElements)
 }
 
+func dequantizeQ6KNative(data []byte, offset int, nElements int) []float64 {
+	nBlocks := nElements / 256
+	result := make([]float64, nElements)
+	for i := 0; i < nBlocks; i++ {
+		dequantizeQ6KBlock(data, offset+i*210, result, i*256)
+	}
+	return result
+}
+
+func dequantizeQ6KBlock(raw []byte, off int, out []float64, outOff int) {
+	d := float16ToFloat64(binary.LittleEndian.Uint16(raw[off+208:]))
+	qlOff := off
+	qhOff := off + 128
+	scalesOff := off + 192
+
+	for n := 0; n < 256; n += 128 {
+		for l := 0; l < 32; l++ {
+			is := l / 16
+			q1 := float64(int(int8((raw[qlOff+l]&0xF)|((raw[qhOff+l]>>0)&3)<<4)) - 32)
+			q2 := float64(int(int8((raw[qlOff+l+32]&0xF)|((raw[qhOff+l]>>2)&3)<<4)) - 32)
+			q3 := float64(int(int8((raw[qlOff+l]>>4)|((raw[qhOff+l]>>4)&3)<<4)) - 32)
+			q4 := float64(int(int8((raw[qlOff+l+32]>>4)|((raw[qhOff+l]>>6)&3)<<4)) - 32)
+			sc0 := float64(int8(raw[scalesOff+is+0]))
+			sc2 := float64(int8(raw[scalesOff+is+2]))
+			sc4 := float64(int8(raw[scalesOff+is+4]))
+			sc6 := float64(int8(raw[scalesOff+is+6]))
+			out[outOff+l+0] = d * sc0 * q1
+			out[outOff+l+32] = d * sc2 * q2
+			out[outOff+l+64] = d * sc4 * q3
+			out[outOff+l+96] = d * sc6 * q4
+		}
+		outOff += 128
+		qlOff += 64
+		qhOff += 32
+		scalesOff += 8
+	}
+}
+
 func (g *GGUFModel) loadQuantized2D(fileData []byte, ti *tensorInfo, actualRows, actualCols, nElements int) interface{} {
 	offset := int(ti.RawOffset)
 
 	switch ti.Type {
-	case 0, 1, 2, 3, 6, 8, 12, 14:
-		if actualCols >= 256 && (ti.Type == 12 || ti.Type == 14) {
-			blocksPerRow := actualCols / 256
-			if blocksPerRow < 1 {
-				blocksPerRow = 1
-			}
-			blockSize := 144
-			qType := "q4k"
-			if ti.Type == 14 {
-				blockSize = 210
-				qType = "q6k"
-			}
-			nBlocks := nElements / 256
-			totalBytes := nBlocks * blockSize
-			raw := make([]byte, totalBytes)
-			copy(raw, fileData[offset:int(offset)+totalBytes])
-			return &QuantWeight{
-				QType:  qType,
-				Raw:    raw,
-				Groups: blocksPerRow,
-				Rows:   actualRows,
-				Cols:   actualCols,
-			}
-		}
-
+	case 0, 1, 2, 3, 6, 8:
 		groupSize := 32
 		blockSize := 0
 		qType := ""

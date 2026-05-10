@@ -308,30 +308,6 @@ Example:
 			Fn:       fnDequantizeQ5_0,
 			HelpText: `dequantize_q5_0(raw, n_groups) - Native GGUF Q5_0 block dequantization`,
 		},
-		"linear_q4_k": {
-			Fn:       fnLinearQ4K,
-			HelpText: `linear_q4_k(x, raw, blocks_per_row) - Quantized Q4_K matmul`,
-		},
-		"linear_row_q4_k": {
-			Fn:       fnLinearRowQ4K,
-			HelpText: `linear_row_q4_k(x, raw, blocks_per_row) - Last-row-only Q4_K matmul`,
-		},
-		"dequantize_q4_k": {
-			Fn:       fnDequantizeQ4K,
-			HelpText: `dequantize_q4_k(raw, n_blocks) - Native GGUF Q4_K block dequantization`,
-		},
-		"linear_q6_k": {
-			Fn:       fnLinearQ6K,
-			HelpText: `linear_q6_k(x, raw, blocks_per_row) - Quantized Q6_K matmul`,
-		},
-		"linear_row_q6_k": {
-			Fn:       fnLinearRowQ6K,
-			HelpText: `linear_row_q6_k(x, raw, blocks_per_row) - Last-row-only Q6_K matmul`,
-		},
-		"dequantize_q6_k": {
-			Fn:       fnDequantizeQ6K,
-			HelpText: `dequantize_q6_k(raw, n_blocks) - Native GGUF Q6_K block dequantization`,
-		},
 		"output_logits": {
 			Fn:       fnOutputLogits,
 			HelpText: `output_logits(x, norm_weight, output_weight) - Fused RMS norm + output projection`,

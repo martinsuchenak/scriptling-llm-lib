@@ -60,12 +60,6 @@ func fusedMatmul(w object.Object, xData []float64, xRows, xCols int) ([]float64,
 		if d.HasByString("q5") {
 			return fusedMatmulQ5(xData, xRows, xCols, d)
 		}
-		if d.HasByString("q4k") {
-			return fusedMatmulQ4K(xData, xRows, xCols, d)
-		}
-		if d.HasByString("q6k") {
-			return fusedMatmulQ6K(xData, xRows, xCols, d)
-		}
 		if d.HasByString("q8") {
 			pair, _ := d.GetByString("raw")
 			if raw, ok := pair.Value.(*object.String); ok {
@@ -106,74 +100,6 @@ func fusedMatmulQ5(xData []float64, xRows, xCols int, d *object.Dict) ([]float64
 			var sum float64
 			for g := 0; g < groupsPerRow; g++ {
 				sum += q5DotGroupX(rawBytes, wRawOff+g*22, xData, xOff+g*32)
-			}
-			result[xi*outFeatures+j] = sum
-		}
-	})
-	return result, xRows, outFeatures
-}
-
-func fusedMatmulQ4K(xData []float64, xRows, xCols int, d *object.Dict) ([]float64, int, int) {
-	rawPair, _ := d.GetByString("raw")
-	raw, ok := rawPair.Value.(*object.String)
-	if !ok {
-		return nil, 0, 0
-	}
-	bprPair, _ := d.GetByString("blocks_per_row")
-	bprVal, err := bprPair.Value.AsInt()
-	if err != nil {
-		return nil, 0, 0
-	}
-	blocksPerRow := int(bprVal)
-
-	rawBytes := []byte(raw.Value)
-	rowBytes := blocksPerRow * 144
-	outFeatures := len(rawBytes) / rowBytes
-
-	result := make([]float64, xRows*outFeatures)
-	parallelFor(xRows*outFeatures, func(start, end int) {
-		for idx := start; idx < end; idx++ {
-			xi := idx / outFeatures
-			j := idx % outFeatures
-			xOff := xi * xCols
-			wRawOff := j * rowBytes
-			var sum float64
-			for b := 0; b < blocksPerRow; b++ {
-				sum += q4kDotBlockFast(rawBytes, wRawOff+b*144, xData, xOff+b*256)
-			}
-			result[xi*outFeatures+j] = sum
-		}
-	})
-	return result, xRows, outFeatures
-}
-
-func fusedMatmulQ6K(xData []float64, xRows, xCols int, d *object.Dict) ([]float64, int, int) {
-	rawPair, _ := d.GetByString("raw")
-	raw, ok := rawPair.Value.(*object.String)
-	if !ok {
-		return nil, 0, 0
-	}
-	bprPair, _ := d.GetByString("blocks_per_row")
-	bprVal, err := bprPair.Value.AsInt()
-	if err != nil {
-		return nil, 0, 0
-	}
-	blocksPerRow := int(bprVal)
-
-	rawBytes := []byte(raw.Value)
-	rowBytes := blocksPerRow * 210
-	outFeatures := len(rawBytes) / rowBytes
-
-	result := make([]float64, xRows*outFeatures)
-	parallelFor(xRows*outFeatures, func(start, end int) {
-		for idx := start; idx < end; idx++ {
-			xi := idx / outFeatures
-			j := idx % outFeatures
-			xOff := xi * xCols
-			wRawOff := j * rowBytes
-			var sum float64
-			for b := 0; b < blocksPerRow; b++ {
-				sum += q6kDotBlock(rawBytes, wRawOff+b*210, xData, xOff+b*256)
 			}
 			result[xi*outFeatures+j] = sum
 		}

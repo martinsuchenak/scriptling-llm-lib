@@ -301,53 +301,6 @@ func TestQ5DotGroupXF32(t *testing.T) {
 	}
 }
 
-func TestQ4kDotBlockFastF32(t *testing.T) {
-	raw := make([]byte, 144)
-	binary.LittleEndian.PutUint16(raw[0:2], 0x3C00)
-	binary.LittleEndian.PutUint16(raw[2:4], 0x0000)
-	for i := 4; i < 144; i++ {
-		raw[i] = byte(i)
-	}
-
-	xData := make([]float32, 256)
-	for i := range xData {
-		xData[i] = float32(i%32) * 0.01
-	}
-
-	resultF32 := q4kDotBlockFastF32(raw, 0, xData, 0)
-	resultF64 := q4kDotBlockFast(raw, 0, f32ToF64(xData), 0)
-
-	if math.IsNaN(float64(resultF32)) || math.IsInf(float64(resultF32), 0) {
-		t.Fatalf("q4kDotBlockFastF32 = %f, expected finite", resultF32)
-	}
-	if math.Abs(float64(resultF32)-resultF64) > 0.1 {
-		t.Errorf("q4kDotBlockFastF32 = %f, q4kDotBlockFast (f64) = %f", resultF32, resultF64)
-	}
-}
-
-func TestQ6kDotBlockF32(t *testing.T) {
-	raw := make([]byte, 210)
-	for i := 0; i < 210; i++ {
-		raw[i] = byte(i)
-	}
-	binary.LittleEndian.PutUint16(raw[208:210], 0x3C00)
-
-	xData := make([]float32, 256)
-	for i := range xData {
-		xData[i] = float32(i%32) * 0.01
-	}
-
-	resultF32 := q6kDotBlockF32(raw, 0, xData, 0)
-	resultF64 := q6kDotBlock(raw, 0, f32ToF64(xData), 0)
-
-	if math.IsNaN(float64(resultF32)) || math.IsInf(float64(resultF32), 0) {
-		t.Fatalf("q6kDotBlockF32 = %f, expected finite", resultF32)
-	}
-	if math.Abs(float64(resultF32)-resultF64) > 0.1 {
-		t.Errorf("q6kDotBlockF32 = %f, q6kDotBlock (f64) = %f", resultF32, resultF64)
-	}
-}
-
 func TestModelMatmulQuantF32Q8(t *testing.T) {
 	qValues := make([]int8, 32)
 	for i := range qValues {

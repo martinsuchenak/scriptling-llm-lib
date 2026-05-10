@@ -548,42 +548,6 @@ func modelMatmulQuant(w *QuantWeight, xData []float64, xRows, xCols int) ([]floa
 			}
 		})
 		return result, xRows, outFeatures
-	case "q4k":
-		blocksPerRow := w.Groups
-		rowBytes := blocksPerRow * 144
-		result := make([]float64, xRows*outFeatures)
-		parallelFor(xRows*outFeatures, func(start, end int) {
-			for idx := start; idx < end; idx++ {
-				xi := idx / outFeatures
-				j := idx % outFeatures
-				xOff := xi * xCols
-				rOff := j * rowBytes
-				var sum float64
-				for b := 0; b < blocksPerRow; b++ {
-					sum += q4kDotBlockFast(rawBytes, rOff+b*144, xData, xOff+b*256)
-				}
-				result[xi*outFeatures+j] = sum
-			}
-		})
-		return result, xRows, outFeatures
-	case "q6k":
-		blocksPerRow := w.Groups
-		rowBytes := blocksPerRow * 210
-		result := make([]float64, xRows*outFeatures)
-		parallelFor(xRows*outFeatures, func(start, end int) {
-			for idx := start; idx < end; idx++ {
-				xi := idx / outFeatures
-				j := idx % outFeatures
-				xOff := xi * xCols
-				rOff := j * rowBytes
-				var sum float64
-				for b := 0; b < blocksPerRow; b++ {
-					sum += q6kDotBlock(rawBytes, rOff+b*210, xData, xOff+b*256)
-				}
-				result[xi*outFeatures+j] = sum
-			}
-		})
-		return result, xRows, outFeatures
 	}
 
 	return nil, 0, 0
@@ -662,36 +626,6 @@ func modelMatmulRowQuant(w *QuantWeight, normed []float64) []float64 {
 				var sum float64
 				for g := 0; g < groupsPerRow; g++ {
 					sum += q5DotGroupX(rawBytes, rOff+g*22, normed, g*32)
-				}
-				result[j] = sum
-			}
-		})
-		return result
-	case "q4k":
-		blocksPerRow := w.Groups
-		rowBytes := blocksPerRow * 144
-		result := make([]float64, outFeatures)
-		parallelFor(outFeatures, func(start, end int) {
-			for j := start; j < end; j++ {
-				rOff := j * rowBytes
-				var sum float64
-				for b := 0; b < blocksPerRow; b++ {
-					sum += q4kDotBlockFast(rawBytes, rOff+b*144, normed, b*256)
-				}
-				result[j] = sum
-			}
-		})
-		return result
-	case "q6k":
-		blocksPerRow := w.Groups
-		rowBytes := blocksPerRow * 210
-		result := make([]float64, outFeatures)
-		parallelFor(outFeatures, func(start, end int) {
-			for j := start; j < end; j++ {
-				rOff := j * rowBytes
-				var sum float64
-				for b := 0; b < blocksPerRow; b++ {
-					sum += q6kDotBlock(rawBytes, rOff+b*210, normed, b*256)
 				}
 				result[j] = sum
 			}

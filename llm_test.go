@@ -13,8 +13,8 @@ func TestLibraryRegistration(t *testing.T) {
 
 	funcs := Library.Functions()
 	funcCount := len(funcs)
-	if funcCount != 56 {
-		t.Errorf("Library has %d functions, want 56", funcCount)
+	if funcCount != 50 {
+		t.Errorf("Library has %d functions, want 50", funcCount)
 	}
 
 	required := []string{
@@ -23,10 +23,9 @@ func TestLibraryRegistration(t *testing.T) {
 		"vec_add", "vec_sub", "vec_mul", "vec_scale", "vec_apply",
 		"rms_norm", "rope", "silu_gate", "attention", "linear", "linear_row",
 		"linear_q8", "linear_row_q8", "linear_q4", "linear_row_q4",
-		"linear_q4_k", "linear_row_q4_k", "linear_q5", "linear_row_q5",
-		"linear_q6_k", "linear_row_q6_k",
+		"linear_q5", "linear_row_q5",
 		"top_k", "dequantize_q8", "dequantize_q8_0", "dequantize_q4_0",
-		"dequantize_q4_k", "dequantize_q5_0", "dequantize_q6_k",
+		"dequantize_q5_0",
 		"sample", "split_heads", "merge_heads", "repeat_kv",
 		"concat_rows", "slice_rows", "flatten", "reshape", "zeros", "arange",
 		"quantize_q8", "quantize_q8_rows",

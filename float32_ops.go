@@ -18,6 +18,9 @@ type TransformerBlockF32 struct {
 	WK        interface{}
 	WV        interface{}
 	WO        interface{}
+	QBias     []float32
+	KBias     []float32
+	VBias     []float32
 	QNormW    []float32
 	KNormW    []float32
 	FFNNormW  []float32
@@ -375,78 +378,6 @@ func q5DotGroupXF32(raw []byte, rawOff int, xData []float32, xBase int) float32 
 	return s * sum
 }
 
-func q4kDotBlockFastF32(raw []byte, blkOff int, x []float32, xOff int) float32 {
-	d := readF16F32(raw, blkOff)
-	dmin := readF16F32(raw, blkOff+2)
-	scalesOff := blkOff + 4
-	qsOff := blkOff + 16
-
-	var sum float32
-	is := 0
-	qPos := 0
-
-	for group := 0; group < 4; group++ {
-		sc0, m0 := getScaleMinK4(is, raw[scalesOff:])
-		sc1, m1 := getScaleMinK4(is+1, raw[scalesOff:])
-		d1 := d * float32(sc0)
-		m1v := dmin * float32(m0)
-		d2 := d * float32(sc1)
-		m2v := dmin * float32(m1)
-
-		qBase := qsOff + qPos
-		xBase := xOff + group*64
-
-		for l := 0; l < 32; l++ {
-			q := float32(raw[qBase+l] & 0xF)
-			sum += (d1*q - m1v) * x[xBase+l]
-		}
-		for l := 0; l < 32; l++ {
-			q := float32(raw[qBase+l] >> 4)
-			sum += (d2*q - m2v) * x[xBase+32+l]
-		}
-
-		qPos += 32
-		is += 2
-	}
-
-	return sum
-}
-
-func q6kDotBlockF32(raw []byte, blkOff int, x []float32, xOff int) float32 {
-	d := readF16F32(raw, blkOff+208)
-	qlOff := blkOff
-	qhOff := blkOff + 128
-	scalesOff := blkOff + 192
-
-	var sum float32
-
-	for n := 0; n < 256; n += 128 {
-		for l := 0; l < 32; l++ {
-			is := l / 16
-			q1 := float32(int(int8((raw[qlOff+l]&0xF)|((raw[qhOff+l]>>0)&3)<<4)) - 32)
-			q2 := float32(int(int8((raw[qlOff+l+32]&0xF)|((raw[qhOff+l]>>2)&3)<<4)) - 32)
-			q3 := float32(int(int8((raw[qlOff+l]>>4)|((raw[qhOff+l]>>4)&3)<<4)) - 32)
-			q4 := float32(int(int8((raw[qlOff+l+32]>>4)|((raw[qhOff+l]>>6)&3)<<4)) - 32)
-
-			sc0 := float32(int8(raw[scalesOff+is+0]))
-			sc2 := float32(int8(raw[scalesOff+is+2]))
-			sc4 := float32(int8(raw[scalesOff+is+4]))
-			sc6 := float32(int8(raw[scalesOff+is+6]))
-
-			sum += d * sc0 * q1 * x[xOff+l+0]
-			sum += d * sc2 * q2 * x[xOff+l+32]
-			sum += d * sc4 * q3 * x[xOff+l+64]
-			sum += d * sc6 * q4 * x[xOff+l+96]
-		}
-		xOff += 128
-		qlOff += 64
-		qhOff += 32
-		scalesOff += 8
-	}
-
-	return sum
-}
-
 func modelMatmulF32(w interface{}, xData []float32, xRows, xCols int) ([]float32, int, int) {
 	switch wt := w.(type) {
 	case *QuantWeight:
@@ -513,26 +444,6 @@ func modelMatmulQuantIntoF32(w *QuantWeight, xData []float32, xRows, xCols int, 
 				result[xi*outFeatures+j] = q5DotRowsF32(rawBytes, j*rowBytes, xData, xi*xCols, groupsPerRow)
 			}
 		})
-	case "q4k":
-		blocksPerRow := w.Groups
-		rowBytes := blocksPerRow * 144
-		parallelFor(xRows*outFeatures, func(start, end int) {
-			for idx := start; idx < end; idx++ {
-				xi := idx / outFeatures
-				j := idx % outFeatures
-				result[xi*outFeatures+j] = q4kDotRowsF32(rawBytes, j*rowBytes, xData, xi*xCols, blocksPerRow)
-			}
-		})
-	case "q6k":
-		blocksPerRow := w.Groups
-		rowBytes := blocksPerRow * 210
-		parallelFor(xRows*outFeatures, func(start, end int) {
-			for idx := start; idx < end; idx++ {
-				xi := idx / outFeatures
-				j := idx % outFeatures
-				result[xi*outFeatures+j] = q6kDotRowsF32(rawBytes, j*rowBytes, xData, xi*xCols, blocksPerRow)
-			}
-		})
 	}
 	return result, xRows, outFeatures
 }
@@ -586,22 +497,6 @@ func q5DotRowsF32(raw []byte, rOff int, xData []float32, xOff, groups int) float
 	var sum float32
 	for g := 0; g < groups; g++ {
 		sum += q5DotGroupXF32(raw, rOff+g*22, xData, xOff+g*32)
-	}
-	return sum
-}
-
-func q4kDotRowsF32(raw []byte, rOff int, xData []float32, xOff, blocks int) float32 {
-	var sum float32
-	for b := 0; b < blocks; b++ {
-		sum += q4kDotBlockFastF32(raw, rOff+b*144, xData, xOff+b*256)
-	}
-	return sum
-}
-
-func q6kDotRowsF32(raw []byte, rOff int, xData []float32, xOff, blocks int) float32 {
-	var sum float32
-	for b := 0; b < blocks; b++ {
-		sum += q6kDotBlockF32(raw, rOff+b*210, xData, xOff+b*256)
 	}
 	return sum
 }
@@ -683,42 +578,6 @@ func modelMatmulQuantF32(w *QuantWeight, xData []float32, xRows, xCols int) ([]f
 			}
 		})
 		return result, xRows, outFeatures
-	case "q4k":
-		blocksPerRow := w.Groups
-		rowBytes := blocksPerRow * 144
-		result := matmulAlloc(xRows * outFeatures)
-		parallelFor(xRows*outFeatures, func(start, end int) {
-			for idx := start; idx < end; idx++ {
-				xi := idx / outFeatures
-				j := idx % outFeatures
-				xOff := xi * xCols
-				rOff := j * rowBytes
-				var sum float32
-				for b := 0; b < blocksPerRow; b++ {
-					sum += q4kDotBlockFastF32(rawBytes, rOff+b*144, xData, xOff+b*256)
-				}
-				result[xi*outFeatures+j] = sum
-			}
-		})
-		return result, xRows, outFeatures
-	case "q6k":
-		blocksPerRow := w.Groups
-		rowBytes := blocksPerRow * 210
-		result := matmulAlloc(xRows * outFeatures)
-		parallelFor(xRows*outFeatures, func(start, end int) {
-			for idx := start; idx < end; idx++ {
-				xi := idx / outFeatures
-				j := idx % outFeatures
-				xOff := xi * xCols
-				rOff := j * rowBytes
-				var sum float32
-				for b := 0; b < blocksPerRow; b++ {
-					sum += q6kDotBlockF32(rawBytes, rOff+b*210, xData, xOff+b*256)
-				}
-				result[xi*outFeatures+j] = sum
-			}
-		})
-		return result, xRows, outFeatures
 	}
 
 	return nil, 0, 0
@@ -789,24 +648,6 @@ func modelMatmulRowQuantIntoF32(w *QuantWeight, normed []float32, dst []float32)
 			}
 		})
 		return result
-	case "q4k":
-		blocksPerRow := w.Groups
-		rowBytes := blocksPerRow * 144
-		parallelFor(outFeatures, func(start, end int) {
-			for j := start; j < end; j++ {
-				result[j] = q4kDotRowsF32(rawBytes, j*rowBytes, normed, 0, blocksPerRow)
-			}
-		})
-		return result
-	case "q6k":
-		blocksPerRow := w.Groups
-		rowBytes := blocksPerRow * 210
-		parallelFor(outFeatures, func(start, end int) {
-			for j := start; j < end; j++ {
-				result[j] = q6kDotRowsF32(rawBytes, j*rowBytes, normed, 0, blocksPerRow)
-			}
-		})
-		return result
 	}
 
 	return nil
@@ -872,36 +713,6 @@ func modelMatmulRowQuantF32(w *QuantWeight, normed []float32) []float32 {
 				var sum float32
 				for g := 0; g < groupsPerRow; g++ {
 					sum += q5DotGroupXF32(rawBytes, rOff+g*22, normed, g*32)
-				}
-				result[j] = sum
-			}
-		})
-		return result
-	case "q4k":
-		blocksPerRow := w.Groups
-		rowBytes := blocksPerRow * 144
-		result := matmulAlloc(outFeatures)
-		parallelFor(outFeatures, func(start, end int) {
-			for j := start; j < end; j++ {
-				rOff := j * rowBytes
-				var sum float32
-				for b := 0; b < blocksPerRow; b++ {
-					sum += q4kDotBlockFastF32(rawBytes, rOff+b*144, normed, b*256)
-				}
-				result[j] = sum
-			}
-		})
-		return result
-	case "q6k":
-		blocksPerRow := w.Groups
-		rowBytes := blocksPerRow * 210
-		result := matmulAlloc(outFeatures)
-		parallelFor(outFeatures, func(start, end int) {
-			for j := start; j < end; j++ {
-				rOff := j * rowBytes
-				var sum float32
-				for b := 0; b < blocksPerRow; b++ {
-					sum += q6kDotBlockF32(rawBytes, rOff+b*210, normed, b*256)
 				}
 				result[j] = sum
 			}

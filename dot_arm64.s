@@ -8,6 +8,10 @@
 // Each Q8_0 group: 2-byte f16 scale + 32 int8 = 34 bytes.
 // x data: 32 float32 per group = 128 bytes per group.
 //
+// TODO: Replace with NEON SIMD using WORD directives for instructions
+// not supported by Go's arm64 assembler (SHLL, SCVTF vector, FMUL vector, ADDV).
+// The scalar version processes 4 elements per iteration using SCVTFS + FMULS.
+//
 // ABI0 stack layout:
 //   rawPtr  +0(FP)  8 bytes
 //   xPtr    +8(FP)  8 bytes

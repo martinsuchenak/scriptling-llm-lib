@@ -9,14 +9,12 @@ import (
 
 func TestGGUFTypeSizes(t *testing.T) {
 	expected := map[int]int{
-		0:  4,
-		1:  2,
-		2:  18,
-		3:  20,
-		6:  22,
-		8:  34,
-		12: 144,
-		14: 210,
+		0: 4,
+		1: 2,
+		2: 18,
+		3: 20,
+		6: 22,
+		8: 34,
 	}
 	for k, v := range expected {
 		if ggufTypeSizes[k] != v {

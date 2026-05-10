@@ -56,24 +56,24 @@ func TestTransformerBlockQuantWeights(t *testing.T) {
 	block := TransformerBlock{
 		AttnNormW: []float64{1.0},
 		WQ: &QuantWeight{
-			QType:  "q4k",
-			Raw:    make([]byte, 144),
+			QType:  "q8",
+			Raw:    make([]byte, 34),
 			Groups: 1,
 			Rows:   1,
-			Cols:   256,
+			Cols:   32,
 		},
 		WK:       &QuantWeight{QType: "q8", Raw: make([]byte, 34), Groups: 1, Rows: 1, Cols: 32},
 		WV:       &QuantWeight{QType: "q8", Raw: make([]byte, 34), Groups: 1, Rows: 1, Cols: 32},
 		WO:       &QuantWeight{QType: "q8", Raw: make([]byte, 34), Groups: 1, Rows: 1, Cols: 32},
 		FFNNormW: []float64{1.0},
-		WGate:    &QuantWeight{QType: "q4k", Raw: make([]byte, 144), Groups: 1, Rows: 1, Cols: 256},
-		WUp:      &QuantWeight{QType: "q4k", Raw: make([]byte, 144), Groups: 1, Rows: 1, Cols: 256},
-		WDown:    &QuantWeight{QType: "q4k", Raw: make([]byte, 144), Groups: 1, Rows: 1, Cols: 256},
+		WGate:    &QuantWeight{QType: "q8", Raw: make([]byte, 34), Groups: 1, Rows: 1, Cols: 32},
+		WUp:      &QuantWeight{QType: "q8", Raw: make([]byte, 34), Groups: 1, Rows: 1, Cols: 32},
+		WDown:    &QuantWeight{QType: "q8", Raw: make([]byte, 34), Groups: 1, Rows: 1, Cols: 32},
 	}
 	if qw, ok := block.WQ.(*QuantWeight); !ok {
 		t.Error("WQ should be *QuantWeight")
-	} else if qw.QType != "q4k" {
-		t.Errorf("WQ QType = %q, want 'q4k'", qw.QType)
+	} else if qw.QType != "q8" {
+		t.Errorf("WQ QType = %q, want 'q8'", qw.QType)
 	}
 }
 

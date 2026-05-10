@@ -2,49 +2,11 @@ package scriptlingllmlib
 
 import (
 	"context"
-	"encoding/binary"
 	"math"
 
 	"github.com/paularlott/scriptling/errors"
 	"github.com/paularlott/scriptling/object"
 )
-
-func q4kDotBlockFast(raw []byte, blkOff int, x []float64, xOff int) float64 {
-	d := float16ToFloat64(binary.LittleEndian.Uint16(raw[blkOff:]))
-	dmin := float16ToFloat64(binary.LittleEndian.Uint16(raw[blkOff+2:]))
-	scalesOff := blkOff + 4
-	qsOff := blkOff + 16
-
-	var sum float64
-	is := 0
-	qPos := 0
-
-	for group := 0; group < 4; group++ {
-		sc0, m0 := getScaleMinK4(is, raw[scalesOff:])
-		sc1, m1 := getScaleMinK4(is+1, raw[scalesOff:])
-		d1 := d * float64(sc0)
-		m1v := dmin * float64(m0)
-		d2 := d * float64(sc1)
-		m2v := dmin * float64(m1)
-
-		qBase := qsOff + qPos
-		xBase := xOff + group*64
-
-		for l := 0; l < 32; l++ {
-			q := float64(raw[qBase+l] & 0xF)
-			sum += (d1*q - m1v) * x[xBase+l]
-		}
-		for l := 0; l < 32; l++ {
-			q := float64(raw[qBase+l] >> 4)
-			sum += (d2*q - m2v) * x[xBase+32+l]
-		}
-
-		qPos += 32
-		is += 2
-	}
-
-	return sum
-}
 
 func math_sqrt(x float64) float64 {
 	return math.Sqrt(x)

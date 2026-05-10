@@ -75,6 +75,62 @@ tasks:
     desc: Remove build artifacts
     cmds:
       - rm -rf bin/ coverage.txt coverage.html
+
+  smoke:
+    desc: Run smoke test against all available models
+    cmds:
+      - go test -run='TestSmokeAllModels$' -v -timeout 600s ./...
+
+  models:download:
+    desc: Download test models from HuggingFace (~5GB total)
+    cmds:
+      - mkdir -p models
+      - for:
+          - name: SmolLM2-135M-Instruct-Q8_0.gguf
+            url: https://huggingface.co/bartowski/SmolLM2-135M-Instruct-GGUF/resolve/main/SmolLM2-135M-Instruct-Q8_0.gguf
+          - name: SmolLM2-135M-Instruct-Q4_0.gguf
+            url: https://huggingface.co/bartowski/SmolLM2-135M-Instruct-GGUF/resolve/main/SmolLM2-135M-Instruct-Q4_0.gguf
+          - name: SmolLM2-360M-Instruct-Q8_0.gguf
+            url: https://huggingface.co/bartowski/SmolLM2-360M-Instruct-GGUF/resolve/main/SmolLM2-360M-Instruct-Q8_0.gguf
+          - name: SmolLM2-360M-Instruct-Q4_0.gguf
+            url: https://huggingface.co/bartowski/SmolLM2-360M-Instruct-GGUF/resolve/main/SmolLM2-360M-Instruct-Q4_0.gguf
+          - name: SmolLM2-1.7B-Instruct-Q8_0.gguf
+            url: https://huggingface.co/bartowski/SmolLM2-1.7B-Instruct-GGUF/resolve/main/SmolLM2-1.7B-Instruct-Q8_0.gguf
+          - name: SmolLM2-1.7B-Instruct-Q4_0.gguf
+            url: https://huggingface.co/bartowski/SmolLM2-1.7B-Instruct-GGUF/resolve/main/SmolLM2-1.7B-Instruct-Q4_0.gguf
+          - name: tinyllama-1.1b-1t-openorca.Q8_0.gguf
+            url: https://huggingface.co/TheBloke/TinyLlama-1.1B-1T-OpenOrca-GGUF/resolve/main/tinyllama-1.1b-1t-openorca.Q8_0.gguf
+        cmd: |
+          if [ -f "models/{{.ITEM.name}}" ]; then
+            echo "SKIP (exists): models/{{.ITEM.name}}"
+          else
+            echo "Downloading {{.ITEM.name}}..."
+            curl -L --progress-bar -o "models/{{.ITEM.name}}" "{{.ITEM.url}}"
+          fi
+
+  models:download:extra:
+    desc: Download additional compatible models (Llama 3.2 1B, Qwen2.5 0.5B, Qwen3 1.7B)
+    cmds:
+      - mkdir -p models
+      - for:
+          - name: Llama-3.2-1B-Instruct-Q8_0.gguf
+            url: https://huggingface.co/bartowski/Llama-3.2-1B-Instruct-GGUF/resolve/main/Llama-3.2-1B-Instruct-Q8_0.gguf
+          - name: Qwen2.5-0.5B-Instruct-Q8_0.gguf
+            url: https://huggingface.co/bartowski/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/Qwen2.5-0.5B-Instruct-Q8_0.gguf
+          - name: Qwen3-1.7B-Q8_0.gguf
+            url: https://huggingface.co/bartowski/Qwen3-1.7B-GGUF/resolve/main/Qwen3-1.7B-Q8_0.gguf
+        cmd: |
+          if [ -f "models/{{.ITEM.name}}" ]; then
+            echo "SKIP (exists): models/{{.ITEM.name}}"
+          else
+            echo "Downloading {{.ITEM.name}}..."
+            curl -L --progress-bar -o "models/{{.ITEM.name}}" "{{.ITEM.url}}"
+          fi
+
+  models:clean:
+    desc: Remove downloaded model files
+    cmds:
+      - rm -f models/*.gguf
   
   release:
     desc: 'Create a version tag and push it (usage: task release -- v0.1.0)'
