@@ -448,7 +448,6 @@ func (m *InferenceModelF32) forwardBlock(blockIdx int, xData []float32, seqLen, 
 	cacheLen := kvLen - seqLen
 	attnSize := seqLen * m.nHeads * m.dK
 	b.attnOut = growSlice(b.attnOut, attnSize)
-	zeroSlice(b.attnOut)
 	for h := 0; h < m.nHeads; h++ {
 		fusedAttentionHeadF32(qHeads[h], kHeads[h], vHeads[h], seqLen, m.dK, kvLen, true, cacheLen, b.attnOut, h*seqLen*m.dK)
 	}
