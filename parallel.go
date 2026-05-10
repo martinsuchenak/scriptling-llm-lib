@@ -62,7 +62,6 @@ func parallelFor(n int, fn func(start, end int)) {
 		return
 	}
 
-	// Dispatch all but one chunk to workers, do last chunk on caller
 	for i := 0; i < n; i += chunk {
 		end := i + chunk
 		if end > n {
