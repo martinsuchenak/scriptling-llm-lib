@@ -79,7 +79,7 @@ tasks:
   smoke:
     desc: Run smoke test against all available models
     cmds:
-      - go test -run='TestSmokeAllModels$' -v -timeout 600s ./...
+      - go test -tags=smoke -run='TestSmokeAllModels$' -v -timeout 600s ./...
 
   models:download:
     desc: Download test models from HuggingFace (~5GB total)
