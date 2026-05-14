@@ -601,7 +601,7 @@ func fnTopK(ctx context.Context, kwargs object.Kwargs, args ...object.Object) ob
 	for i, tv := range top {
 		result[i] = &object.List{Elements: []object.Object{
 			object.NewInteger(int64(tv.index)),
-			&object.Float{Value: tv.value},
+			object.NewFloat(tv.value),
 		}}
 	}
 	return &object.List{Elements: result}
@@ -672,7 +672,7 @@ func fnDequantizeQ8_0(ctx context.Context, kwargs object.Kwargs, args ...object.
 		return errors.NewError("dequantize_q8_0: n_groups must be positive")
 	}
 
-	rawStr := raw.Value
+	rawStr := raw.StringValue()
 	expectedLen := int(nGroups) * 34
 	if len(rawStr) < expectedLen {
 		return errors.NewError("dequantize_q8_0: raw data too short (%d bytes, need %d)", len(rawStr), expectedLen)
@@ -733,7 +733,7 @@ func fnLinearQ8(ctx context.Context, kwargs object.Kwargs, args ...object.Object
 	}
 	groupsPerRow := int(gpr)
 
-	rawBytes := []byte(raw.Value)
+	rawBytes := []byte(raw.StringValue())
 	rowBytes := groupsPerRow * 34
 	outFeatures := len(rawBytes) / rowBytes
 	inFeatures := groupsPerRow * 32
@@ -890,7 +890,7 @@ func fnLinearRowQ8(ctx context.Context, kwargs object.Kwargs, args ...object.Obj
 	}
 	groupsPerRow := int(gpr)
 
-	rawBytes := []byte(raw.Value)
+	rawBytes := []byte(raw.StringValue())
 	rowBytes := groupsPerRow * 34
 	outFeatures := len(rawBytes) / rowBytes
 	inFeatures := groupsPerRow * 32
@@ -1046,7 +1046,7 @@ func fnDequantizeQ4_0(ctx context.Context, kwargs object.Kwargs, args ...object.
 	if err != nil {
 		return errors.NewTypeError("INTEGER", args[1].Type().String())
 	}
-	rawBytes := []byte(raw.Value)
+	rawBytes := []byte(raw.StringValue())
 	result := make([]float64, int(nGroups)*32)
 	for g := 0; g < int(nGroups); g++ {
 		scale, values := dequantizeQ4_0Block(rawBytes, g*18)
@@ -1075,7 +1075,7 @@ func fnLinearQ4(ctx context.Context, kwargs object.Kwargs, args ...object.Object
 	}
 	groupsPerRow := int(gpr)
 
-	rawBytes := []byte(raw.Value)
+	rawBytes := []byte(raw.StringValue())
 	rowBytes := groupsPerRow * 18
 	outFeatures := len(rawBytes) / rowBytes
 	inFeatures := groupsPerRow * 32

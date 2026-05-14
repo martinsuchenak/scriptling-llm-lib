@@ -15,8 +15,8 @@ github.com/lufia/plan9stats v0.0.0-20260330125221-c963978e514e h1:Q6MvJtQK/iRcRt
 github.com/lufia/plan9stats v0.0.0-20260330125221-c963978e514e/go.mod h1:autxFIvghDt3jPTLoqZ9OZ7s9qTGNAWmYCjVFWPX/zg=
 github.com/paularlott/logger v0.3.0 h1:QwVUoxmlEFkfHI25y5dn56OJvK4Bpe3OvoJu4GZM7ng=
 github.com/paularlott/logger v0.3.0/go.mod h1:vjAOY1vUvYigmJxxQ0eMclryIjDS6VWNK6FprtTMce0=
-github.com/paularlott/scriptling v0.7.0 h1:CEaup1poH9shN7l/3+7mvbv+D60+V4FAcHqwXi2sQHQ=
-github.com/paularlott/scriptling v0.7.0/go.mod h1:lx7nDgeb8mIBltV5mxu3mCGSWnk+vHWOCrlgfQkXhqM=
+github.com/paularlott/scriptling v0.8.0 h1:5DSEyH53IKdthqkwFNY2jG96SmEDp0MnNsl7D7ceRbk=
+github.com/paularlott/scriptling v0.8.0/go.mod h1:lx7nDgeb8mIBltV5mxu3mCGSWnk+vHWOCrlgfQkXhqM=
 github.com/paularlott/snapshotkv v0.3.0 h1:FUxebbnUJJtnJwjd+W8obyD78WX/opvZkSvY6Cc+5xg=
 github.com/paularlott/snapshotkv v0.3.0/go.mod h1:X2ONJRnGTRUV2j8tIdO187y0QLm4n7bnCbdnV/mTWUQ=
 github.com/pmezard/go-difflib v1.0.0 h1:4DBwDE0NGyQoBHbLQYPwSUPoCMWR5BEzIk/f1lZbAQM=

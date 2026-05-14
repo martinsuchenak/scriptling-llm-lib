@@ -7,11 +7,11 @@ import (
 )
 
 func TestToFloatListErrors(t *testing.T) {
-	_, errObj := toFloatList(&object.String{Value: "x"}, "test", "p")
+	_, errObj := toFloatList(object.NewString("x"), "test", "p")
 	if errObj == nil {
 		t.Error("expected error for non-list input")
 	}
-	strList := &object.List{Elements: []object.Object{&object.String{Value: "x"}}}
+	strList := &object.List{Elements: []object.Object{object.NewString("x")}}
 	_, errObj = toFloatList(strList, "test", "p")
 	if errObj == nil {
 		t.Error("expected error for non-number element")
@@ -19,11 +19,11 @@ func TestToFloatListErrors(t *testing.T) {
 }
 
 func TestToFloatMatrixErrors(t *testing.T) {
-	_, errObj := toFloatMatrix(&object.String{Value: "x"}, "test", "p")
+	_, errObj := toFloatMatrix(object.NewString("x"), "test", "p")
 	if errObj == nil {
 		t.Error("expected error for non-list input")
 	}
-	listWithStr := &object.List{Elements: []object.Object{&object.String{Value: "x"}}}
+	listWithStr := &object.List{Elements: []object.Object{object.NewString("x")}}
 	_, errObj = toFloatMatrix(listWithStr, "test", "p")
 	if errObj == nil {
 		t.Error("expected error for non-list row")
@@ -37,7 +37,7 @@ func TestToFloatMatrixErrors(t *testing.T) {
 		t.Error("expected error for non-rectangular matrix")
 	}
 	strInMatrix := &object.List{Elements: []object.Object{
-		&object.List{Elements: []object.Object{&object.String{Value: "x"}}},
+		&object.List{Elements: []object.Object{object.NewString("x")}},
 	}}
 	_, errObj = toFloatMatrix(strInMatrix, "test", "p")
 	if errObj == nil {

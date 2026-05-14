@@ -120,7 +120,7 @@ func fnLinearQ8Fast(ctx context.Context, kwargs object.Kwargs, args ...object.Ob
 	}
 	groupsPerRow := int(gpr)
 
-	rawBytes := []byte(raw.Value)
+	rawBytes := []byte(raw.StringValue())
 	rowBytes := groupsPerRow * 34
 	outFeatures := len(rawBytes) / rowBytes
 	inFeatures := groupsPerRow * 32
@@ -188,7 +188,7 @@ func fnLinearRowQ8Fast(ctx context.Context, kwargs object.Kwargs, args ...object
 	}
 	groupsPerRow := int(gpr)
 
-	rawBytes := []byte(raw.Value)
+	rawBytes := []byte(raw.StringValue())
 	rowBytes := groupsPerRow * 34
 	outFeatures := len(rawBytes) / rowBytes
 	inFeatures := groupsPerRow * 32
@@ -258,7 +258,7 @@ func fnLinearQ4Fast(ctx context.Context, kwargs object.Kwargs, args ...object.Ob
 	}
 	groupsPerRow := int(gpr)
 
-	rawBytes := []byte(raw.Value)
+	rawBytes := []byte(raw.StringValue())
 	rowBytes := groupsPerRow * 18
 	outFeatures := len(rawBytes) / rowBytes
 	inFeatures := groupsPerRow * 32
@@ -326,7 +326,7 @@ func fnLinearRowQ4Fast(ctx context.Context, kwargs object.Kwargs, args ...object
 	}
 	groupsPerRow := int(gpr)
 
-	rawBytes := []byte(raw.Value)
+	rawBytes := []byte(raw.StringValue())
 	rowBytes := groupsPerRow * 18
 	outFeatures := len(rawBytes) / rowBytes
 	inFeatures := groupsPerRow * 32

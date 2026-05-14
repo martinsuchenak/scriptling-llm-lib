@@ -61,7 +61,7 @@ func fnOutputLogits(ctx context.Context, kwargs object.Kwargs, args ...object.Ob
 }
 
 func outputLogitsQ8(normed []float64, raw *object.String) object.Object {
-	rawBytes := []byte(raw.Value)
+	rawBytes := []byte(raw.StringValue())
 	groupsPerRow := len(normed) / 32
 	rowBytes := groupsPerRow * 34
 	outFeatures := len(rawBytes) / rowBytes

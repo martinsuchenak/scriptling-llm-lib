@@ -42,8 +42,8 @@ func TestLibraryRegistration(t *testing.T) {
 	if v, ok := consts["VERSION"]; !ok {
 		t.Error("missing VERSION constant")
 	} else {
-		if v.(*object.String).Value != "1.1.0" {
-			t.Errorf("VERSION = %s, want 1.1.0", v.(*object.String).Value)
+		if v.(*object.String).StringValue() != "1.1.0" {
+			t.Errorf("VERSION = %s, want 1.1.0", v.(*object.String).StringValue())
 		}
 	}
 }

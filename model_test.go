@@ -275,10 +275,10 @@ func TestSessionStoreGetSaveClear(t *testing.T) {
 
 func TestClearSessionFn(t *testing.T) {
 	assertError(t, fnClearSession(ctx, noopKwargs), "2 arguments")
-	assertError(t, fnClearSession(ctx, noopKwargs, &object.Integer{Value: 1}, &object.String{Value: "s1"}), "STRING")
-	assertError(t, fnClearSession(ctx, noopKwargs, &object.String{Value: "model.gguf"}, &object.Integer{Value: 1}), "STRING")
+	assertError(t, fnClearSession(ctx, noopKwargs, object.NewInteger(1), object.NewString("s1")), "STRING")
+	assertError(t, fnClearSession(ctx, noopKwargs, object.NewString("model.gguf"), object.NewInteger(1)), "STRING")
 
-	result := fnClearSession(ctx, noopKwargs, &object.String{Value: "model.gguf"}, &object.String{Value: "nonexistent"})
+	result := fnClearSession(ctx, noopKwargs, object.NewString("model.gguf"), object.NewString("nonexistent"))
 	b, err := result.AsBool()
 	if err != nil || !b {
 		t.Error("clear_session on nonexistent session should return true")
@@ -301,22 +301,22 @@ func TestGenerateWithSessionIntegration(t *testing.T) {
 	}
 
 	kwargs1 := object.NewKwargs(map[string]object.Object{
-		"session": &object.String{Value: "test-session-1"},
+		"session": object.NewString("test-session-1"),
 		"stats":   object.NewInteger(0),
 	})
 
 	result1 := fnGenerate(ctx, kwargs1,
-		&object.String{Value: path},
-		&object.String{Value: "Hello"},
+		object.NewString(path),
+		object.NewString("Hello"),
 		object.NewInteger(3),
-		&object.String{Value: "greedy"},
+		object.NewString("greedy"),
 	)
 
 	s1, ok := result1.(*object.String)
 	if !ok {
 		t.Fatalf("first generate returned %s, want STRING", result1.Type().String())
 	}
-	if s1.Value == "" {
+	if s1.StringValue() == "" {
 		t.Error("first generate returned empty string")
 	}
 
@@ -332,21 +332,21 @@ func TestGenerateWithSessionIntegration(t *testing.T) {
 	globalModelCacheF32.mu.Unlock()
 
 	kwargs2 := object.NewKwargs(map[string]object.Object{
-		"session": &object.String{Value: "test-session-1"},
+		"session": object.NewString("test-session-1"),
 	})
 
 	result2 := fnGenerate(ctx, kwargs2,
-		&object.String{Value: path},
-		&object.String{Value: "What else"},
+		object.NewString(path),
+		object.NewString("What else"),
 		object.NewInteger(2),
-		&object.String{Value: "greedy"},
+		object.NewString("greedy"),
 	)
 
 	s2, ok := result2.(*object.String)
 	if !ok {
 		t.Fatalf("second generate returned %s, want STRING", result2.Type().String())
 	}
-	if s2.Value == "" {
+	if s2.StringValue() == "" {
 		t.Error("second generate returned empty string")
 	}
 
@@ -357,7 +357,7 @@ func TestGenerateWithSessionIntegration(t *testing.T) {
 	}
 	globalModelCacheF32.mu.Unlock()
 
-	fnClearSession(ctx, noopKwargs, &object.String{Value: path}, &object.String{Value: "test-session-1"})
+	fnClearSession(ctx, noopKwargs, object.NewString(path), object.NewString("test-session-1"))
 
 	globalModelCacheF32.mu.Lock()
 	if globalModelCacheF32.getSession(path, "test-session-1") != nil {

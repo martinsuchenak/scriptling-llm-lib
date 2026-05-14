@@ -62,13 +62,13 @@ func TestOutputLogitsErrors(t *testing.T) {
 	w := floatMatrix([]float64{1.0, 0.0}, []float64{0.0, 1.0})
 
 	assertError(t, fnOutputLogits(ctx, noopKwargs), "3 arguments")
-	assertError(t, fnOutputLogits(ctx, noopKwargs, &object.String{Value: "x"}, normW, w), "FLOAT_MATRIX")
-	assertError(t, fnOutputLogits(ctx, noopKwargs, x, &object.String{Value: "x"}, w), "LIST")
+	assertError(t, fnOutputLogits(ctx, noopKwargs, object.NewString("x"), normW, w), "FLOAT_MATRIX")
+	assertError(t, fnOutputLogits(ctx, noopKwargs, x, object.NewString("x"), w), "LIST")
 
 	emptyMat := object.NewFloatArray2D([]float64{}, 0, 0)
 	assertError(t, fnOutputLogits(ctx, noopKwargs, emptyMat, normW, w), "empty")
 
-	assertError(t, fnOutputLogits(ctx, noopKwargs, x, normW, &object.Integer{Value: 42}), "unsupported weight type")
+	assertError(t, fnOutputLogits(ctx, noopKwargs, x, normW, object.NewInteger(42)), "unsupported weight type")
 }
 
 func TestMathSqrt(t *testing.T) {

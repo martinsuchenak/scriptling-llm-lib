@@ -69,7 +69,7 @@ func fnQuantizeQ8(ctx context.Context, kwargs object.Kwargs, args ...object.Obje
 		}
 	}
 
-	return &object.String{Value: string(result)}
+	return object.NewString(string(result))
 }
 
 func fnQuantizeQ8Rows(ctx context.Context, kwargs object.Kwargs, args ...object.Object) object.Object {
@@ -127,7 +127,7 @@ func fnQuantizeQ8Rows(ctx context.Context, kwargs object.Kwargs, args ...object.
 		}
 	}
 
-	return &object.String{Value: string(result)}
+	return object.NewString(string(result))
 }
 
 func float64ToFloat16(f float64) uint16 {

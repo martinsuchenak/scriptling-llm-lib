@@ -37,7 +37,7 @@ func fnSample(ctx context.Context, kwargs object.Kwargs, args ...object.Object) 
 		if !ok {
 			return errors.NewTypeError("STRING", args[1].Type().String())
 		}
-		strategy = s.Value
+		strategy = s.StringValue()
 	}
 
 	temperature := 1.0
@@ -161,13 +161,13 @@ func sampleGreedy(logits []float64) object.Object {
 			bestIdx = i
 		}
 	}
-	return &object.Integer{Value: int64(bestIdx)}
+	return object.NewInteger(int64(bestIdx))
 }
 
 func sampleTemperature(logits []float64, temperature float64, n int) object.Object {
 	probs := softmax(logits, temperature)
 	idx := weightedSample(probs, n)
-	return &object.Integer{Value: int64(idx)}
+	return object.NewInteger(int64(idx))
 }
 
 func sampleTopK(logits []float64, temperature float64, k, n int) object.Object {
@@ -194,10 +194,10 @@ func sampleTopK(logits []float64, temperature float64, k, n int) object.Object {
 	for i, p := range probs {
 		cum += p
 		if offset <= cum {
-			return &object.Integer{Value: int64(topIndices[i])}
+			return object.NewInteger(int64(topIndices[i]))
 		}
 	}
-	return &object.Integer{Value: int64(topIndices[k-1])}
+	return object.NewInteger(int64(topIndices[k-1]))
 }
 
 func sampleTopP(logits []float64, temperature float64, p float64, n int) object.Object {
@@ -249,10 +249,10 @@ func sampleTopP(logits []float64, temperature float64, p float64, n int) object.
 	for i, pr := range filteredProbs {
 		cum += pr * invSum
 		if offset <= cum {
-			return &object.Integer{Value: int64(filteredIndices[i])}
+			return object.NewInteger(int64(filteredIndices[i]))
 		}
 	}
-	return &object.Integer{Value: int64(filteredIndices[cutoff-1])}
+	return object.NewInteger(int64(filteredIndices[cutoff-1]))
 }
 
 func softmax(logits []float64, temperature float64) []float64 {

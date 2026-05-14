@@ -28,7 +28,7 @@ func TestSplitHeads(t *testing.T) {
 	}
 
 	assertError(t, fnSplitHeads(ctx, noopKwargs, x), "2 arguments")
-	assertError(t, fnSplitHeads(ctx, noopKwargs, x, &object.String{Value: "x"}), "INTEGER")
+	assertError(t, fnSplitHeads(ctx, noopKwargs, x, object.NewString("x")), "INTEGER")
 	assertError(t, fnSplitHeads(ctx, noopKwargs, x, object.NewInteger(0)), "positive")
 	assertError(t, fnSplitHeads(ctx, noopKwargs, x, object.NewInteger(3)), "divisible")
 }
@@ -48,7 +48,7 @@ func TestMergeHeads(t *testing.T) {
 	}
 
 	assertError(t, fnMergeHeads(ctx, noopKwargs), "1 argument")
-	assertError(t, fnMergeHeads(ctx, noopKwargs, &object.String{Value: "x"}), "LIST")
+	assertError(t, fnMergeHeads(ctx, noopKwargs, object.NewString("x")), "LIST")
 	emptyList := &object.List{Elements: []object.Object{}}
 	assertError(t, fnMergeHeads(ctx, noopKwargs, emptyList), "empty")
 }
@@ -65,7 +65,7 @@ func TestRepeatKV(t *testing.T) {
 	}
 
 	assertError(t, fnRepeatKV(ctx, noopKwargs), "2 arguments")
-	assertError(t, fnRepeatKV(ctx, noopKwargs, &object.String{Value: "x"}, object.NewInteger(2)), "LIST")
-	assertError(t, fnRepeatKV(ctx, noopKwargs, heads, &object.String{Value: "x"}), "INTEGER")
+	assertError(t, fnRepeatKV(ctx, noopKwargs, object.NewString("x"), object.NewInteger(2)), "LIST")
+	assertError(t, fnRepeatKV(ctx, noopKwargs, heads, object.NewString("x")), "INTEGER")
 	assertError(t, fnRepeatKV(ctx, noopKwargs, heads, object.NewInteger(0)), "positive")
 }

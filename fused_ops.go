@@ -86,7 +86,7 @@ func fusedMatmulQ5(xData []float64, xRows, xCols int, d *object.Dict) ([]float64
 	}
 	groupsPerRow := int(gprVal)
 
-	rawBytes := []byte(raw.Value)
+	rawBytes := []byte(raw.StringValue())
 	rowBytes := groupsPerRow * 22
 	outFeatures := len(rawBytes) / rowBytes
 
@@ -108,7 +108,7 @@ func fusedMatmulQ5(xData []float64, xRows, xCols int, d *object.Dict) ([]float64
 }
 
 func fusedMatmulQ8(xData []float64, xRows, xCols int, raw *object.String) ([]float64, int, int) {
-	rawBytes := []byte(raw.Value)
+	rawBytes := []byte(raw.StringValue())
 	groupsPerRow := xCols / 32
 	if groupsPerRow == 0 {
 		return nil, 0, 0

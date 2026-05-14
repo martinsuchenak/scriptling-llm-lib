@@ -68,10 +68,10 @@ func TestFusedQKVWithQ8(t *testing.T) {
 
 func TestFusedQKVErrors(t *testing.T) {
 	assertError(t, fnFusedQKV(ctx, noopKwargs), "4 arguments")
-	assertError(t, fnFusedQKV(ctx, noopKwargs, &object.String{Value: "x"}), "4 arguments")
+	assertError(t, fnFusedQKV(ctx, noopKwargs, object.NewString("x")), "4 arguments")
 
 	x := object.NewFloatArray2D([]float64{1.0}, 1, 1)
-	assertError(t, fnFusedQKV(ctx, noopKwargs, &object.Integer{Value: 1}, x, x, x), "FLOAT_MATRIX")
+	assertError(t, fnFusedQKV(ctx, noopKwargs, object.NewInteger(1), x, x, x), "FLOAT_MATRIX")
 
 	emptyMat := object.NewFloatArray2D([]float64{}, 0, 0)
 	assertError(t, fnFusedQKV(ctx, noopKwargs, emptyMat, x, x, x), "empty")
@@ -103,7 +103,7 @@ func TestFusedFFNErrors(t *testing.T) {
 	assertError(t, fnFusedFFN(ctx, noopKwargs), "4 arguments")
 
 	x := object.NewFloatArray2D([]float64{1.0}, 1, 1)
-	assertError(t, fnFusedFFN(ctx, noopKwargs, &object.Integer{Value: 1}, x, x, x), "FLOAT_MATRIX")
+	assertError(t, fnFusedFFN(ctx, noopKwargs, object.NewInteger(1), x, x, x), "FLOAT_MATRIX")
 
 	emptyMat := object.NewFloatArray2D([]float64{}, 0, 0)
 	assertError(t, fnFusedFFN(ctx, noopKwargs, emptyMat, x, x, x), "empty")
@@ -143,8 +143,8 @@ func TestFusedRopeBatch(t *testing.T) {
 
 func TestFusedRopeBatchErrors(t *testing.T) {
 	assertError(t, fnFusedRopeBatch(ctx, noopKwargs), "2 arguments")
-	assertError(t, fnFusedRopeBatch(ctx, noopKwargs, &object.Integer{Value: 1}, object.NewInteger(0)), "LIST")
-	assertError(t, fnFusedRopeBatch(ctx, noopKwargs, &object.List{Elements: []object.Object{&object.Integer{Value: 1}}}, object.NewInteger(0)), "not a matrix")
+	assertError(t, fnFusedRopeBatch(ctx, noopKwargs, object.NewInteger(1), object.NewInteger(0)), "LIST")
+	assertError(t, fnFusedRopeBatch(ctx, noopKwargs, &object.List{Elements: []object.Object{object.NewInteger(1)}}, object.NewInteger(0)), "not a matrix")
 }
 
 func TestFusedAttention(t *testing.T) {
@@ -196,9 +196,9 @@ func TestFusedAttentionCausal(t *testing.T) {
 
 func TestFusedAttentionErrors(t *testing.T) {
 	assertError(t, fnFusedAttention(ctx, noopKwargs), "3 arguments")
-	assertError(t, fnFusedAttention(ctx, noopKwargs, &object.Integer{Value: 1}), "3 arguments")
-	assertError(t, fnFusedAttention(ctx, noopKwargs, &object.Integer{Value: 1}, &object.List{Elements: nil}, &object.List{Elements: nil}), "LIST")
-	assertError(t, fnFusedAttention(ctx, noopKwargs, &object.List{Elements: nil}, &object.Integer{Value: 1}, &object.List{Elements: nil}), "LIST")
-	assertError(t, fnFusedAttention(ctx, noopKwargs, &object.List{Elements: nil}, &object.List{Elements: nil}, &object.Integer{Value: 1}), "LIST")
+	assertError(t, fnFusedAttention(ctx, noopKwargs, object.NewInteger(1)), "3 arguments")
+	assertError(t, fnFusedAttention(ctx, noopKwargs, object.NewInteger(1), &object.List{Elements: nil}, &object.List{Elements: nil}), "LIST")
+	assertError(t, fnFusedAttention(ctx, noopKwargs, &object.List{Elements: nil}, object.NewInteger(1), &object.List{Elements: nil}), "LIST")
+	assertError(t, fnFusedAttention(ctx, noopKwargs, &object.List{Elements: nil}, &object.List{Elements: nil}, object.NewInteger(1)), "LIST")
 	assertError(t, fnFusedAttention(ctx, noopKwargs, &object.List{Elements: []object.Object{}}, &object.List{Elements: nil}, &object.List{Elements: nil}), "empty")
 }

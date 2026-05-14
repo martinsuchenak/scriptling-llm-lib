@@ -98,7 +98,7 @@ func assertEmptyListOrFloatArray(t *testing.T, obj object.Object) {
 func floatList(vals ...float64) object.Object {
 	elems := make([]object.Object, len(vals))
 	for i, v := range vals {
-		elems[i] = &object.Float{Value: v}
+		elems[i] = object.NewFloat(v)
 	}
 	return &object.List{Elements: elems}
 }
@@ -134,7 +134,7 @@ func makeQ80Raw(groups ...[]byte) *object.String {
 	for _, g := range groups {
 		raw = append(raw, g...)
 	}
-	return &object.String{Value: string(raw)}
+	return object.NewString(string(raw))
 }
 
 func approxEqual(a, b float64) bool {

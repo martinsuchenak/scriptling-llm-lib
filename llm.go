@@ -473,7 +473,7 @@ Returns:
 		},
 	},
 	map[string]object.Object{
-		"VERSION": &object.String{Value: "1.1.0"},
+		"VERSION": object.NewString("1.1.0"),
 	},
 	"LLM inference primitives for transformer model execution",
 )

@@ -43,7 +43,7 @@ func fnSigmoid(ctx context.Context, kwargs object.Kwargs, args ...object.Object)
 	if err != nil {
 		return errors.NewTypeError("INTEGER or FLOAT", args[0].Type().String())
 	}
-	return &object.Float{Value: sigmoid(x)}
+	return object.NewFloat( sigmoid(x))
 }
 
 // fnRelu implements llm.relu.
@@ -55,7 +55,7 @@ func fnRelu(ctx context.Context, kwargs object.Kwargs, args ...object.Object) ob
 	if err != nil {
 		return errors.NewTypeError("INTEGER or FLOAT", args[0].Type().String())
 	}
-	return &object.Float{Value: relu(x)}
+	return object.NewFloat( relu(x))
 }
 
 // fnGelu implements llm.gelu.
@@ -67,7 +67,7 @@ func fnGelu(ctx context.Context, kwargs object.Kwargs, args ...object.Object) ob
 	if err != nil {
 		return errors.NewTypeError("INTEGER or FLOAT", args[0].Type().String())
 	}
-	return &object.Float{Value: gelu(x)}
+	return object.NewFloat( gelu(x))
 }
 
 // fnSilu implements llm.silu.
@@ -79,5 +79,5 @@ func fnSilu(ctx context.Context, kwargs object.Kwargs, args ...object.Object) ob
 	if err != nil {
 		return errors.NewTypeError("INTEGER or FLOAT", args[0].Type().String())
 	}
-	return &object.Float{Value: silu(x)}
+	return object.NewFloat( silu(x))
 }

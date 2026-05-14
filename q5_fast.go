@@ -62,7 +62,7 @@ func fnLinearQ5Fast(ctx context.Context, kwargs object.Kwargs, args ...object.Ob
 	}
 	groupsPerRow := int(gpr)
 
-	rawBytes := []byte(raw.Value)
+	rawBytes := []byte(raw.StringValue())
 	rowBytes := groupsPerRow * 22
 	outFeatures := len(rawBytes) / rowBytes
 	inFeatures := groupsPerRow * 32
@@ -130,7 +130,7 @@ func fnLinearRowQ5Fast(ctx context.Context, kwargs object.Kwargs, args ...object
 	}
 	groupsPerRow := int(gpr)
 
-	rawBytes := []byte(raw.Value)
+	rawBytes := []byte(raw.StringValue())
 	rowBytes := groupsPerRow * 22
 	outFeatures := len(rawBytes) / rowBytes
 	inFeatures := groupsPerRow * 32
@@ -197,7 +197,7 @@ func fnDequantizeQ5_0(ctx context.Context, kwargs object.Kwargs, args ...object.
 	}
 	nGroups := int(nGroups64)
 
-	rawBytes := []byte(raw.Value)
+	rawBytes := []byte(raw.StringValue())
 	result := make([]float64, nGroups*32)
 
 	for g := 0; g < nGroups; g++ {

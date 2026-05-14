@@ -90,7 +90,7 @@ func fnTopk(ctx context.Context, kwargs object.Kwargs, args ...object.Object) ob
 	for i := int64(0); i < k; i++ {
 		result[i] = &object.List{Elements: []object.Object{
 			object.NewInteger(int64(indexed[i].index)),
-			&object.Float{Value: indexed[i].value},
+			object.NewFloat(indexed[i].value),
 		}}
 	}
 	return &object.List{Elements: result}
@@ -158,5 +158,5 @@ func fnClip(ctx context.Context, kwargs object.Kwargs, args ...object.Object) ob
 	if lo > hi {
 		return errors.NewError("clip: lo must be <= hi")
 	}
-	return &object.Float{Value: math.Max(lo, math.Min(hi, x))}
+	return object.NewFloat(math.Max(lo, math.Min(hi, x)))
 }

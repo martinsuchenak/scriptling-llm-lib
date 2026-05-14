@@ -20,7 +20,7 @@ func TestArgmax(t *testing.T) {
 
 	assertError(t, fnArgmax(ctx, noopKwargs), "1 argument")
 	assertError(t, fnArgmax(ctx, noopKwargs, floatList()), "empty")
-	assertError(t, fnArgmax(ctx, noopKwargs, &object.String{Value: "x"}), "LIST")
+	assertError(t, fnArgmax(ctx, noopKwargs, object.NewString("x")), "LIST")
 }
 
 func TestArgmin(t *testing.T) {
@@ -36,7 +36,7 @@ func TestArgmin(t *testing.T) {
 
 	assertError(t, fnArgmin(ctx, noopKwargs, floatList()), "empty")
 	assertError(t, fnArgmin(ctx, noopKwargs), "1 argument")
-	assertError(t, fnArgmin(ctx, noopKwargs, &object.String{Value: "x"}), "LIST")
+	assertError(t, fnArgmin(ctx, noopKwargs, object.NewString("x")), "LIST")
 }
 
 func TestTopk(t *testing.T) {
@@ -73,12 +73,12 @@ func TestTopk(t *testing.T) {
 
 	assertError(t, fnTopk(ctx, noopKwargs, floatList(1.0), object.NewInteger(0)), "positive")
 	assertError(t, fnTopk(ctx, noopKwargs), "2 arguments")
-	assertError(t, fnTopk(ctx, noopKwargs, &object.String{Value: "x"}, object.NewInteger(1)), "LIST")
-	assertError(t, fnTopk(ctx, noopKwargs, floatList(1.0), &object.String{Value: "x"}), "INTEGER")
+	assertError(t, fnTopk(ctx, noopKwargs, object.NewString("x"), object.NewInteger(1)), "LIST")
+	assertError(t, fnTopk(ctx, noopKwargs, floatList(1.0), object.NewString("x")), "INTEGER")
 }
 
 func TestClip(t *testing.T) {
-	result := fnClip(ctx, noopKwargs, floatList(-2.0, 0.5, 3.0, 1.0), &object.Float{Value: -1.0}, &object.Float{Value: 2.0})
+	result := fnClip(ctx, noopKwargs, floatList(-2.0, 0.5, 3.0, 1.0), object.NewFloat(-1.0), object.NewFloat(2.0))
 	vals := evalFloatList(t, result)
 	expected := []float64{-1.0, 0.5, 2.0, 1.0}
 	for i, v := range vals {
@@ -87,16 +87,16 @@ func TestClip(t *testing.T) {
 		}
 	}
 
-	result = fnClip(ctx, noopKwargs, &object.Float{Value: 5.0}, &object.Float{Value: 0.0}, &object.Float{Value: 3.0})
+	result = fnClip(ctx, noopKwargs, object.NewFloat(5.0), object.NewFloat(0.0), object.NewFloat(3.0))
 	if evalFloat(t, result) != 3.0 {
 		t.Errorf("clip(5, 0, 3) = %f, want 3.0", evalFloat(t, result))
 	}
 
-	assertError(t, fnClip(ctx, noopKwargs, &object.Float{Value: 1.0}, &object.Float{Value: 5.0}, &object.Float{Value: 3.0}), "lo must be <= hi")
+	assertError(t, fnClip(ctx, noopKwargs, object.NewFloat(1.0), object.NewFloat(5.0), object.NewFloat(3.0)), "lo must be <= hi")
 	assertError(t, fnClip(ctx, noopKwargs), "3 arguments")
-	assertError(t, fnClip(ctx, noopKwargs, &object.String{Value: "x"}, &object.Float{Value: 0.0}, &object.Float{Value: 1.0}), "INTEGER, FLOAT, or LIST")
-	assertError(t, fnClip(ctx, noopKwargs, floatList(1.0), &object.String{Value: "x"}, &object.Float{Value: 1.0}), "INTEGER or FLOAT")
-	assertError(t, fnClip(ctx, noopKwargs, floatList(1.0), &object.Float{Value: 0.0}, &object.String{Value: "x"}), "INTEGER or FLOAT")
-	strInList := &object.List{Elements: []object.Object{&object.String{Value: "x"}}}
-	assertError(t, fnClip(ctx, noopKwargs, strInList, &object.Float{Value: 0.0}, &object.Float{Value: 1.0}), "INTEGER or FLOAT")
+	assertError(t, fnClip(ctx, noopKwargs, object.NewString("x"), object.NewFloat(0.0), object.NewFloat(1.0)), "INTEGER, FLOAT, or LIST")
+	assertError(t, fnClip(ctx, noopKwargs, floatList(1.0), object.NewString("x"), object.NewFloat(1.0)), "INTEGER or FLOAT")
+	assertError(t, fnClip(ctx, noopKwargs, floatList(1.0), object.NewFloat(0.0), object.NewString("x")), "INTEGER or FLOAT")
+	strInList := &object.List{Elements: []object.Object{object.NewString("x")}}
+	assertError(t, fnClip(ctx, noopKwargs, strInList, object.NewFloat(0.0), object.NewFloat(1.0)), "INTEGER or FLOAT")
 }

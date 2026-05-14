@@ -880,7 +880,7 @@ func fnGenerate(ctx context.Context, kwargs object.Kwargs, args ...object.Object
 		if !ok {
 			return errors.NewTypeError("STRING", args[3].Type().String())
 		}
-		strategy = s.Value
+		strategy = s.StringValue()
 	}
 
 	temperature := 1.0
@@ -912,7 +912,7 @@ func fnGenerate(ctx context.Context, kwargs object.Kwargs, args ...object.Object
 	if kwargs.Has("system_prompt") {
 		sp, ok := kwargs.Get("system_prompt").(*object.String)
 		if ok {
-			systemPrompt = sp.Value
+			systemPrompt = sp.StringValue()
 		}
 	}
 
@@ -920,7 +920,7 @@ func fnGenerate(ctx context.Context, kwargs object.Kwargs, args ...object.Object
 	if kwargs.Has("template") {
 		t, ok := kwargs.Get("template").(*object.String)
 		if ok {
-			templateName = t.Value
+			templateName = t.StringValue()
 		}
 	}
 
@@ -928,7 +928,7 @@ func fnGenerate(ctx context.Context, kwargs object.Kwargs, args ...object.Object
 	if kwargs.Has("stats") {
 		s, ok := kwargs.Get("stats").(*object.Boolean)
 		if ok {
-			showStats = s.Value
+			showStats = s.BoolValue()
 		} else {
 			v, err := kwargs.Get("stats").AsInt()
 			if err == nil {
@@ -941,11 +941,11 @@ func fnGenerate(ctx context.Context, kwargs object.Kwargs, args ...object.Object
 	if kwargs.Has("session") {
 		s, ok := kwargs.Get("session").(*object.String)
 		if ok {
-			sessionID = s.Value
+			sessionID = s.StringValue()
 		}
 	}
 
-	model, err := globalModelCacheF32.getOrLoad(modelPath.Value)
+	model, err := globalModelCacheF32.getOrLoad(modelPath.StringValue())
 	if err != nil {
 		return errors.NewError("generate: %s", err.Error())
 	}
@@ -954,7 +954,7 @@ func fnGenerate(ctx context.Context, kwargs object.Kwargs, args ...object.Object
 
 	if sessionID != "" {
 		globalModelCacheF32.mu.Lock()
-		entry := globalModelCacheF32.getSession(modelPath.Value, sessionID)
+		entry := globalModelCacheF32.getSession(modelPath.StringValue(), sessionID)
 		if entry != nil {
 			model.KVCaches = entry.kvCaches
 			kvStartPos = entry.kvPos
@@ -966,7 +966,7 @@ func fnGenerate(ctx context.Context, kwargs object.Kwargs, args ...object.Object
 
 	tGenStart := time.Now()
 	result, nGen, nPrompt, finalPos := model.Generate(
-		prompt.Value, maxTokens, strategy, temperature,
+		prompt.StringValue(), maxTokens, strategy, temperature,
 		topK, topP, repeatPenalty, repeatLastN,
 		systemPrompt, templateName, kvStartPos,
 	)
@@ -974,7 +974,7 @@ func fnGenerate(ctx context.Context, kwargs object.Kwargs, args ...object.Object
 
 	if sessionID != "" {
 		globalModelCacheF32.mu.Lock()
-		globalModelCacheF32.saveSession(modelPath.Value, sessionID, model.KVCaches, finalPos)
+		globalModelCacheF32.saveSession(modelPath.StringValue(), sessionID, model.KVCaches, finalPos)
 		globalModelCacheF32.mu.Unlock()
 	}
 
@@ -991,10 +991,10 @@ func fnGenerate(ctx context.Context, kwargs object.Kwargs, args ...object.Object
 			promptTps = float64(nPrompt) / prefillSec
 		}
 		stats := fmt.Sprintf("\n--- stats ---\n  prompt tokens: %d\n  gen tokens:    %d\n  prefill:       %.2fs (%.1f t/s)\n  decode:        %.2fs (%.1f t/s)\n  total:         %.2fs", nPrompt, nGen, prefillSec, promptTps, decodeSec, tps, totalTime)
-		return &object.String{Value: result + stats}
+		return object.NewString(result + stats)
 	}
 
-	return &object.String{Value: result}
+	return object.NewString(result)
 }
 
 func fnClearSession(ctx context.Context, kwargs object.Kwargs, args ...object.Object) object.Object {
@@ -1013,7 +1013,7 @@ func fnClearSession(ctx context.Context, kwargs object.Kwargs, args ...object.Ob
 	}
 
 	globalModelCacheF32.mu.Lock()
-	globalModelCacheF32.clearSession(modelPath.Value, sessionID.Value)
+	globalModelCacheF32.clearSession(modelPath.StringValue(), sessionID.StringValue())
 	globalModelCacheF32.mu.Unlock()
 
 	return object.NewBoolean(true)

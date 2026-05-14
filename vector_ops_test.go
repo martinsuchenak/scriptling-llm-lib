@@ -18,8 +18,8 @@ func TestVecAdd(t *testing.T) {
 	}
 	assertError(t, fnVecAdd(ctx, noopKwargs, floatList(1.0), floatList(1.0, 2.0)), "same length")
 	assertError(t, fnVecAdd(ctx, noopKwargs), "2 arguments")
-	assertError(t, fnVecAdd(ctx, noopKwargs, &object.String{Value: "x"}, floatList(1.0)), "LIST")
-	assertError(t, fnVecAdd(ctx, noopKwargs, floatList(1.0), &object.String{Value: "x"}), "LIST")
+	assertError(t, fnVecAdd(ctx, noopKwargs, object.NewString("x"), floatList(1.0)), "LIST")
+	assertError(t, fnVecAdd(ctx, noopKwargs, floatList(1.0), object.NewString("x")), "LIST")
 }
 
 func TestVecSub(t *testing.T) {
@@ -33,7 +33,7 @@ func TestVecSub(t *testing.T) {
 	}
 	assertError(t, fnVecSub(ctx, noopKwargs), "2 arguments")
 	assertError(t, fnVecSub(ctx, noopKwargs, floatList(1.0), floatList(1.0, 2.0)), "same length")
-	assertError(t, fnVecSub(ctx, noopKwargs, &object.String{Value: "x"}, floatList(1.0)), "LIST")
+	assertError(t, fnVecSub(ctx, noopKwargs, object.NewString("x"), floatList(1.0)), "LIST")
 }
 
 func TestVecMul(t *testing.T) {
@@ -44,11 +44,11 @@ func TestVecMul(t *testing.T) {
 	}
 	assertError(t, fnVecMul(ctx, noopKwargs), "2 arguments")
 	assertError(t, fnVecMul(ctx, noopKwargs, floatList(1.0), floatList(1.0, 2.0)), "same length")
-	assertError(t, fnVecMul(ctx, noopKwargs, &object.String{Value: "x"}, floatList(1.0)), "LIST")
+	assertError(t, fnVecMul(ctx, noopKwargs, object.NewString("x"), floatList(1.0)), "LIST")
 }
 
 func TestVecScale(t *testing.T) {
-	result := fnVecScale(ctx, noopKwargs, floatList(1.0, 2.0, 3.0), &object.Float{Value: 2.0})
+	result := fnVecScale(ctx, noopKwargs, floatList(1.0, 2.0, 3.0), object.NewFloat(2.0))
 	vals := evalFloatList(t, result)
 	expected := []float64{2.0, 4.0, 6.0}
 	for i, v := range vals {
@@ -57,14 +57,14 @@ func TestVecScale(t *testing.T) {
 		}
 	}
 	assertError(t, fnVecScale(ctx, noopKwargs), "2 arguments")
-	assertError(t, fnVecScale(ctx, noopKwargs, &object.String{Value: "x"}, &object.Float{Value: 1.0}), "LIST")
-	assertError(t, fnVecScale(ctx, noopKwargs, floatList(1.0), &object.String{Value: "x"}), "INTEGER or FLOAT")
+	assertError(t, fnVecScale(ctx, noopKwargs, object.NewString("x"), object.NewFloat(1.0)), "LIST")
+	assertError(t, fnVecScale(ctx, noopKwargs, floatList(1.0), object.NewString("x")), "INTEGER or FLOAT")
 }
 
 func TestVecApply(t *testing.T) {
 	input := floatList(-1.0, 0.0, 1.0, 2.0)
 
-	result := fnVecApply(ctx, noopKwargs, input, &object.String{Value: "relu"})
+	result := fnVecApply(ctx, noopKwargs, input, object.NewString("relu"))
 	vals := evalFloatList(t, result)
 	expected := []float64{0.0, 0.0, 1.0, 2.0}
 	for i, v := range vals {
@@ -73,7 +73,7 @@ func TestVecApply(t *testing.T) {
 		}
 	}
 
-	result = fnVecApply(ctx, noopKwargs, input, &object.String{Value: "sigmoid"})
+	result = fnVecApply(ctx, noopKwargs, input, object.NewString("sigmoid"))
 	vals = evalFloatList(t, result)
 	for _, v := range vals {
 		if v < 0 || v > 1 {
@@ -81,21 +81,21 @@ func TestVecApply(t *testing.T) {
 		}
 	}
 
-	assertError(t, fnVecApply(ctx, noopKwargs, floatList(1.0), &object.String{Value: "unknown"}), "unknown function")
+	assertError(t, fnVecApply(ctx, noopKwargs, floatList(1.0), object.NewString("unknown")), "unknown function")
 	assertError(t, fnVecApply(ctx, noopKwargs), "2 arguments")
 	assertError(t, fnVecApply(ctx, noopKwargs, floatList(1.0), object.NewInteger(0)), "STRING")
-	assertError(t, fnVecApply(ctx, noopKwargs, &object.String{Value: "x"}, &object.String{Value: "relu"}), "LIST")
+	assertError(t, fnVecApply(ctx, noopKwargs, object.NewString("x"), object.NewString("relu")), "LIST")
 }
 
 func TestVecApplyGeluSilu(t *testing.T) {
 	input := floatList(0.0, 1.0, -1.0)
-	result := fnVecApply(ctx, noopKwargs, input, &object.String{Value: "gelu"})
+	result := fnVecApply(ctx, noopKwargs, input, object.NewString("gelu"))
 	vals := evalFloatList(t, result)
 	expected1 := 0.5 * 1.0 * (1.0 + math.Erf(1.0/math.Sqrt(2.0)))
 	if math.Abs(vals[1]-expected1) > 1e-10 {
 		t.Errorf("vec_apply(gelu)[1] = %f, want %f", vals[1], expected1)
 	}
-	result = fnVecApply(ctx, noopKwargs, input, &object.String{Value: "silu"})
+	result = fnVecApply(ctx, noopKwargs, input, object.NewString("silu"))
 	vals = evalFloatList(t, result)
 	expectedSilu1 := 1.0 / (1.0 + math.Exp(-1.0))
 	if math.Abs(vals[1]-expectedSilu1) > 1e-10 {

@@ -23,8 +23,8 @@ func TestConcatRows(t *testing.T) {
 	mismatchB := floatMatrix([]float64{3.0, 4.0, 5.0})
 	assertError(t, fnConcatRows(ctx, noopKwargs, mismatchA, mismatchB), "columns")
 	assertError(t, fnConcatRows(ctx, noopKwargs), "2 arguments")
-	assertError(t, fnConcatRows(ctx, noopKwargs, &object.String{Value: "x"}, floatMatrix([]float64{1.0})), "LIST")
-	assertError(t, fnConcatRows(ctx, noopKwargs, floatMatrix([]float64{1.0}), &object.String{Value: "x"}), "LIST")
+	assertError(t, fnConcatRows(ctx, noopKwargs, object.NewString("x"), floatMatrix([]float64{1.0})), "LIST")
+	assertError(t, fnConcatRows(ctx, noopKwargs, floatMatrix([]float64{1.0}), object.NewString("x")), "LIST")
 	result = fnConcatRows(ctx, noopKwargs, floatMatrix(), floatMatrix())
 	assertEmptyListOrFloatArray(t, result)
 }
@@ -48,9 +48,9 @@ func TestSliceRows(t *testing.T) {
 	}
 
 	assertError(t, fnSliceRows(ctx, noopKwargs), "3 arguments")
-	assertError(t, fnSliceRows(ctx, noopKwargs, &object.String{Value: "x"}, object.NewInteger(0), object.NewInteger(1)), "LIST")
-	assertError(t, fnSliceRows(ctx, noopKwargs, floatMatrix([]float64{1.0}), &object.String{Value: "x"}, object.NewInteger(1)), "INTEGER")
-	assertError(t, fnSliceRows(ctx, noopKwargs, floatMatrix([]float64{1.0}), object.NewInteger(0), &object.String{Value: "x"}), "INTEGER")
+	assertError(t, fnSliceRows(ctx, noopKwargs, object.NewString("x"), object.NewInteger(0), object.NewInteger(1)), "LIST")
+	assertError(t, fnSliceRows(ctx, noopKwargs, floatMatrix([]float64{1.0}), object.NewString("x"), object.NewInteger(1)), "INTEGER")
+	assertError(t, fnSliceRows(ctx, noopKwargs, floatMatrix([]float64{1.0}), object.NewInteger(0), object.NewString("x")), "INTEGER")
 
 	m2 := floatMatrix([]float64{1.0}, []float64{2.0}, []float64{3.0})
 	result = fnSliceRows(ctx, noopKwargs, m2, object.NewInteger(2), object.NewInteger(2))
@@ -73,7 +73,7 @@ func TestFlatten(t *testing.T) {
 		}
 	}
 	assertError(t, fnFlatten(ctx, noopKwargs), "1 argument")
-	assertError(t, fnFlatten(ctx, noopKwargs, &object.String{Value: "x"}), "LIST")
+	assertError(t, fnFlatten(ctx, noopKwargs, object.NewString("x")), "LIST")
 }
 
 func TestReshape(t *testing.T) {
@@ -89,7 +89,7 @@ func TestReshape(t *testing.T) {
 
 	assertError(t, fnReshape(ctx, noopKwargs, data, object.NewInteger(2), object.NewInteger(2)), "must equal")
 	assertError(t, fnReshape(ctx, noopKwargs), "3 arguments")
-	assertError(t, fnReshape(ctx, noopKwargs, &object.String{Value: "x"}, object.NewInteger(1), object.NewInteger(1)), "LIST")
+	assertError(t, fnReshape(ctx, noopKwargs, object.NewString("x"), object.NewInteger(1), object.NewInteger(1)), "LIST")
 }
 
 func TestZeros(t *testing.T) {
@@ -111,7 +111,7 @@ func TestZeros(t *testing.T) {
 	}
 
 	assertError(t, fnZeros(ctx, noopKwargs), "1 argument")
-	assertError(t, fnZeros(ctx, noopKwargs, &object.String{Value: "x"}), "INTEGER")
+	assertError(t, fnZeros(ctx, noopKwargs, object.NewString("x")), "INTEGER")
 }
 
 func TestArange(t *testing.T) {
@@ -124,18 +124,18 @@ func TestArange(t *testing.T) {
 		}
 	}
 
-	result = fnArange(ctx, noopKwargs, &object.Float{Value: 1.0}, &object.Float{Value: 4.0})
+	result = fnArange(ctx, noopKwargs, object.NewFloat(1.0), object.NewFloat(4.0))
 	vals = evalFloatList(t, result)
 	if len(vals) != 3 || vals[0] != 1.0 || vals[2] != 3.0 {
 		t.Errorf("arange(1,4) = %v", vals)
 	}
 
-	result = fnArange(ctx, noopKwargs, &object.Float{Value: 0.0}, &object.Float{Value: 1.0}, &object.Float{Value: 0.25})
+	result = fnArange(ctx, noopKwargs, object.NewFloat(0.0), object.NewFloat(1.0), object.NewFloat(0.25))
 	vals = evalFloatList(t, result)
 	if len(vals) != 4 {
 		t.Errorf("arange(0,1,0.25) len = %d, want 4", len(vals))
 	}
 
-	assertError(t, fnArange(ctx, noopKwargs, &object.Float{Value: 0.0}, &object.Float{Value: 1.0}, &object.Float{Value: 0.0}), "step must not be zero")
+	assertError(t, fnArange(ctx, noopKwargs, object.NewFloat(0.0), object.NewFloat(1.0), object.NewFloat(0.0)), "step must not be zero")
 	assertError(t, fnArange(ctx, noopKwargs), "1 argument")
 }

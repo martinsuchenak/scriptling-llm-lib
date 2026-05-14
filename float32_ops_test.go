@@ -308,7 +308,7 @@ func TestModelMatmulQuantF32Q8(t *testing.T) {
 	}
 	raw := makeQ80Raw(makeQ80Group(0x3C00, qValues))
 
-	w := &QuantWeight{QType: "q8", Raw: []byte(raw.Value), Groups: 1, Rows: 1, Cols: 32}
+	w := &QuantWeight{QType: "q8", Raw: []byte(raw.StringValue()), Groups: 1, Rows: 1, Cols: 32}
 	xData := make([]float32, 32)
 	for i := range xData {
 		xData[i] = 1.0
@@ -330,7 +330,7 @@ func TestModelMatmulRowQuantF32Q8(t *testing.T) {
 	}
 	raw := makeQ80Raw(makeQ80Group(0x3C00, qValues))
 
-	w := &QuantWeight{QType: "q8", Raw: []byte(raw.Value), Groups: 1, Rows: 1, Cols: 32}
+	w := &QuantWeight{QType: "q8", Raw: []byte(raw.StringValue()), Groups: 1, Rows: 1, Cols: 32}
 	normed := make([]float32, 32)
 	for i := range normed {
 		normed[i] = 1.0
@@ -681,7 +681,7 @@ func TestModelMatmulRowQuantIntoF32Q8(t *testing.T) {
 	}
 	raw := makeQ80Raw(makeQ80Group(0x3C00, qValues))
 
-	w := &QuantWeight{QType: "q8", Raw: []byte(raw.Value), Groups: 1, Rows: 1, Cols: 32}
+	w := &QuantWeight{QType: "q8", Raw: []byte(raw.StringValue()), Groups: 1, Rows: 1, Cols: 32}
 	normed := make([]float32, 32)
 	for i := range normed {
 		normed[i] = 1.0

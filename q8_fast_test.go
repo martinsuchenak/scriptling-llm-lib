@@ -246,7 +246,7 @@ func TestLinearQ4Fast(t *testing.T) {
 	for i := 2; i < 18; i++ {
 		group[i] = 0x99 // all nibbles = 9
 	}
-	raw := &object.String{Value: string(group)}
+	raw := object.NewString(string(group))
 
 	result := fnLinearQ4Fast(ctx, noopKwargs, x, raw, object.NewInteger(1))
 	mat := evalFloatMatrix(t, result)
@@ -272,7 +272,7 @@ func TestLinearRowQ4Fast(t *testing.T) {
 	for i := 2; i < 18; i++ {
 		group[i] = 0x99
 	}
-	raw := &object.String{Value: string(group)}
+	raw := object.NewString(string(group))
 
 	result := fnLinearRowQ4Fast(ctx, noopKwargs, x, raw, object.NewInteger(1))
 	vals := evalFloatList(t, result)
@@ -284,27 +284,27 @@ func TestLinearRowQ4Fast(t *testing.T) {
 func TestLinearQ8FastErrors(t *testing.T) {
 	assertError(t, fnLinearQ8Fast(ctx, noopKwargs), "3 arguments")
 	assertError(t, fnLinearQ8Fast(ctx, noopKwargs, floatMatrix([]float64{1.0}), floatList(1.0), object.NewInteger(1)), "STRING")
-	assertError(t, fnLinearQ8Fast(ctx, noopKwargs, floatMatrix([]float64{1.0}), &object.String{Value: "x"}, floatList(1.0)), "INTEGER")
-	assertError(t, fnLinearQ8Fast(ctx, noopKwargs, floatMatrix([]float64{1.0}), &object.String{Value: "x"}, object.NewInteger(0)), "positive")
+	assertError(t, fnLinearQ8Fast(ctx, noopKwargs, floatMatrix([]float64{1.0}), object.NewString("x"), floatList(1.0)), "INTEGER")
+	assertError(t, fnLinearQ8Fast(ctx, noopKwargs, floatMatrix([]float64{1.0}), object.NewString("x"), object.NewInteger(0)), "positive")
 }
 
 func TestLinearRowQ8FastErrors(t *testing.T) {
 	assertError(t, fnLinearRowQ8Fast(ctx, noopKwargs), "3 arguments")
 	assertError(t, fnLinearRowQ8Fast(ctx, noopKwargs, floatMatrix([]float64{1.0}), floatList(1.0), object.NewInteger(1)), "STRING")
-	assertError(t, fnLinearRowQ8Fast(ctx, noopKwargs, floatMatrix([]float64{1.0}), &object.String{Value: "x"}, floatList(1.0)), "INTEGER")
+	assertError(t, fnLinearRowQ8Fast(ctx, noopKwargs, floatMatrix([]float64{1.0}), object.NewString("x"), floatList(1.0)), "INTEGER")
 }
 
 func TestLinearQ4FastErrors(t *testing.T) {
 	assertError(t, fnLinearQ4Fast(ctx, noopKwargs), "3 arguments")
 	assertError(t, fnLinearQ4Fast(ctx, noopKwargs, floatMatrix([]float64{1.0}), floatList(1.0), object.NewInteger(1)), "STRING")
-	assertError(t, fnLinearQ4Fast(ctx, noopKwargs, floatMatrix([]float64{1.0}), &object.String{Value: "x"}, floatList(1.0)), "INTEGER")
-	assertError(t, fnLinearQ4Fast(ctx, noopKwargs, floatMatrix([]float64{1.0}), &object.String{Value: "x"}, object.NewInteger(0)), "positive")
+	assertError(t, fnLinearQ4Fast(ctx, noopKwargs, floatMatrix([]float64{1.0}), object.NewString("x"), floatList(1.0)), "INTEGER")
+	assertError(t, fnLinearQ4Fast(ctx, noopKwargs, floatMatrix([]float64{1.0}), object.NewString("x"), object.NewInteger(0)), "positive")
 }
 
 func TestLinearRowQ4FastErrors(t *testing.T) {
 	assertError(t, fnLinearRowQ4Fast(ctx, noopKwargs), "3 arguments")
 	assertError(t, fnLinearRowQ4Fast(ctx, noopKwargs, floatMatrix([]float64{1.0}), floatList(1.0), object.NewInteger(1)), "STRING")
-	assertError(t, fnLinearRowQ4Fast(ctx, noopKwargs, floatMatrix([]float64{1.0}), &object.String{Value: "x"}, floatList(1.0)), "INTEGER")
+	assertError(t, fnLinearRowQ4Fast(ctx, noopKwargs, floatMatrix([]float64{1.0}), object.NewString("x"), floatList(1.0)), "INTEGER")
 }
 
 func TestLinearQ8FastDimensionMismatch(t *testing.T) {
@@ -316,7 +316,7 @@ func TestLinearQ8FastDimensionMismatch(t *testing.T) {
 
 func TestLinearQ4FastDimensionMismatch(t *testing.T) {
 	group := make([]byte, 18)
-	raw := &object.String{Value: string(group)}
+	raw := object.NewString(string(group))
 	x := object.NewFloatArray2D([]float64{1.0, 1.0}, 1, 2)
 	assertError(t, fnLinearQ4Fast(ctx, noopKwargs, x, raw, object.NewInteger(1)), "columns")
 }
@@ -330,7 +330,7 @@ func TestLinearQ8FastEmptyInput(t *testing.T) {
 
 func TestLinearQ4FastEmptyInput(t *testing.T) {
 	group := make([]byte, 18)
-	raw := &object.String{Value: string(group)}
+	raw := object.NewString(string(group))
 	emptyMat := object.NewFloatArray2D([]float64{}, 0, 0)
 	assertError(t, fnLinearQ4Fast(ctx, noopKwargs, emptyMat, raw, object.NewInteger(1)), "empty")
 }

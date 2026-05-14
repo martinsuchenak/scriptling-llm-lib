@@ -48,7 +48,7 @@ func TestLinearQ5Fast(t *testing.T) {
 	}
 	group := makeQ5Group(1.0, 0, qs)
 
-	raw := &object.String{Value: string(group)}
+	raw := object.NewString(string(group))
 	ones := make([]float64, 32)
 	for i := range ones {
 		ones[i] = 1.0
@@ -72,7 +72,7 @@ func TestLinearRowQ5Fast(t *testing.T) {
 	}
 	group := makeQ5Group(1.0, 0, qs)
 
-	raw := &object.String{Value: string(group)}
+	raw := object.NewString(string(group))
 
 	row0 := make([]float64, 32)
 	row1 := make([]float64, 32)
@@ -97,7 +97,7 @@ func TestDequantizeQ5_0(t *testing.T) {
 		qs[i] = 0x00
 	}
 	group := makeQ5Group(1.0, 0, qs)
-	raw := &object.String{Value: string(group)}
+	raw := object.NewString(string(group))
 
 	result := fnDequantizeQ5_0(ctx, noopKwargs, raw, object.NewInteger(1))
 	vals := evalFloatList(t, result)
@@ -118,7 +118,7 @@ func TestDequantizeQ5_0WithHighBits(t *testing.T) {
 	}
 	var qh uint32 = 0xFFFFFFFF
 	group := makeQ5Group(2.0, qh, qs)
-	raw := &object.String{Value: string(group)}
+	raw := object.NewString(string(group))
 
 	result := fnDequantizeQ5_0(ctx, noopKwargs, raw, object.NewInteger(1))
 	vals := evalFloatList(t, result)
@@ -135,27 +135,27 @@ func TestDequantizeQ5_0WithHighBits(t *testing.T) {
 func TestLinearQ5FastErrors(t *testing.T) {
 	assertError(t, fnLinearQ5Fast(ctx, noopKwargs), "3 arguments")
 	assertError(t, fnLinearQ5Fast(ctx, noopKwargs, floatMatrix([]float64{1.0}), floatList(1.0), object.NewInteger(1)), "STRING")
-	assertError(t, fnLinearQ5Fast(ctx, noopKwargs, floatMatrix([]float64{1.0}), &object.String{Value: "x"}, floatList(1.0)), "INTEGER")
-	assertError(t, fnLinearQ5Fast(ctx, noopKwargs, floatMatrix([]float64{1.0}), &object.String{Value: "x"}, object.NewInteger(0)), "positive")
+	assertError(t, fnLinearQ5Fast(ctx, noopKwargs, floatMatrix([]float64{1.0}), object.NewString("x"), floatList(1.0)), "INTEGER")
+	assertError(t, fnLinearQ5Fast(ctx, noopKwargs, floatMatrix([]float64{1.0}), object.NewString("x"), object.NewInteger(0)), "positive")
 }
 
 func TestLinearRowQ5FastErrors(t *testing.T) {
 	assertError(t, fnLinearRowQ5Fast(ctx, noopKwargs), "3 arguments")
 	assertError(t, fnLinearRowQ5Fast(ctx, noopKwargs, floatMatrix([]float64{1.0}), floatList(1.0), object.NewInteger(1)), "STRING")
-	assertError(t, fnLinearRowQ5Fast(ctx, noopKwargs, floatMatrix([]float64{1.0}), &object.String{Value: "x"}, floatList(1.0)), "INTEGER")
-	assertError(t, fnLinearRowQ5Fast(ctx, noopKwargs, floatMatrix([]float64{1.0}), &object.String{Value: "x"}, object.NewInteger(0)), "positive")
+	assertError(t, fnLinearRowQ5Fast(ctx, noopKwargs, floatMatrix([]float64{1.0}), object.NewString("x"), floatList(1.0)), "INTEGER")
+	assertError(t, fnLinearRowQ5Fast(ctx, noopKwargs, floatMatrix([]float64{1.0}), object.NewString("x"), object.NewInteger(0)), "positive")
 }
 
 func TestDequantizeQ5_0Errors(t *testing.T) {
 	assertError(t, fnDequantizeQ5_0(ctx, noopKwargs), "2 arguments")
 	assertError(t, fnDequantizeQ5_0(ctx, noopKwargs, floatList(1.0), object.NewInteger(1)), "STRING")
-	assertError(t, fnDequantizeQ5_0(ctx, noopKwargs, &object.String{Value: "x"}, floatList(1.0)), "INTEGER")
+	assertError(t, fnDequantizeQ5_0(ctx, noopKwargs, object.NewString("x"), floatList(1.0)), "INTEGER")
 }
 
 func TestLinearQ5FastDimensionMismatch(t *testing.T) {
 	qs := make([]byte, 16)
 	group := makeQ5Group(1.0, 0, qs)
-	raw := &object.String{Value: string(group)}
+	raw := object.NewString(string(group))
 
 	x := object.NewFloatArray2D([]float64{1.0, 1.0}, 1, 2)
 	assertError(t, fnLinearQ5Fast(ctx, noopKwargs, x, raw, object.NewInteger(1)), "columns")
@@ -171,7 +171,7 @@ func TestLinearQ5ViaDict(t *testing.T) {
 
 	d := object.NewStringDict(map[string]object.Object{
 		"q5":             object.NewInteger(1),
-		"raw":            &object.String{Value: rawStr},
+		"raw":            object.NewString(rawStr),
 		"groups_per_row": object.NewInteger(1),
 	})
 

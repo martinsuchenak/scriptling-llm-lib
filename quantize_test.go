@@ -28,7 +28,7 @@ func TestLinearQ8Scriptling(t *testing.T) {
 		1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0,
 		1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0})
 
-	w := &object.String{Value: string(raw)}
+	w := object.NewString(string(raw))
 	gpr := object.NewInteger(int64(groupsPerRow))
 
 	result := fnLinearQ8(ctx, noopKwargs, x, w, gpr)
@@ -66,7 +66,7 @@ func TestLinearQ4Scriptling(t *testing.T) {
 		1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0,
 		1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0})
 
-	w := &object.String{Value: string(q4Raw)}
+	w := object.NewString(string(q4Raw))
 	gpr := object.NewInteger(int64(nCols / 32))
 
 	result := fnLinearQ4(ctx, noopKwargs, x, w, gpr)
@@ -97,7 +97,7 @@ func TestQuantizeQ8(t *testing.T) {
 		t.Fatalf("quantize_q8 returned %s, want STRING", result.Type().String())
 	}
 
-	rawBytes := []byte(raw.Value)
+	rawBytes := []byte(raw.StringValue())
 	expectedLen := nRows * (nCols / 32) * 34
 	if len(rawBytes) != expectedLen {
 		t.Fatalf("quantize_q8 raw len = %d, want %d", len(rawBytes), expectedLen)
@@ -135,8 +135,8 @@ func TestQuantizeQ8Roundtrip(t *testing.T) {
 
 func TestQuantizeQ8Errors(t *testing.T) {
 	assertError(t, fnQuantizeQ8(ctx, noopKwargs), "3 arguments")
-	assertError(t, fnQuantizeQ8(ctx, noopKwargs, &object.String{Value: "x"}, object.NewInteger(1), object.NewInteger(32)), "LIST")
-	assertError(t, fnQuantizeQ8(ctx, noopKwargs, floatList(make([]float64, 32)...), &object.String{Value: "x"}, object.NewInteger(32)), "INTEGER")
+	assertError(t, fnQuantizeQ8(ctx, noopKwargs, object.NewString("x"), object.NewInteger(1), object.NewInteger(32)), "LIST")
+	assertError(t, fnQuantizeQ8(ctx, noopKwargs, floatList(make([]float64, 32)...), object.NewString("x"), object.NewInteger(32)), "INTEGER")
 	assertError(t, fnQuantizeQ8(ctx, noopKwargs, floatList(make([]float64, 32)...), object.NewInteger(1), object.NewInteger(31)), "divisible by 32")
 	assertError(t, fnQuantizeQ8(ctx, noopKwargs, floatList(make([]float64, 10)...), object.NewInteger(1), object.NewInteger(32)), "must equal rows*cols")
 }
@@ -145,8 +145,8 @@ func TestQuantizeQ8Rows(t *testing.T) {
 	nCols := 32
 	matrix := floatMatrix(make([]float64, nCols), make([]float64, nCols))
 	for i := 0; i < nCols; i++ {
-		matrix.(*object.List).Elements[0].(*object.List).Elements[i] = &object.Float{Value: 1.0}
-		matrix.(*object.List).Elements[1].(*object.List).Elements[i] = &object.Float{Value: -1.0}
+		matrix.(*object.List).Elements[0].(*object.List).Elements[i] = object.NewFloat(1.0)
+		matrix.(*object.List).Elements[1].(*object.List).Elements[i] = object.NewFloat(-1.0)
 	}
 
 	result := fnQuantizeQ8Rows(ctx, noopKwargs, matrix, object.NewInteger(int64(nCols)))
@@ -155,7 +155,7 @@ func TestQuantizeQ8Rows(t *testing.T) {
 		t.Fatalf("quantize_q8_rows returned %s", result.Type().String())
 	}
 
-	rawBytes := []byte(raw.Value)
+	rawBytes := []byte(raw.StringValue())
 	expectedLen := 2 * (nCols / 32) * 34
 	if len(rawBytes) != expectedLen {
 		t.Fatalf("quantize_q8_rows raw len = %d, want %d", len(rawBytes), expectedLen)
@@ -164,7 +164,7 @@ func TestQuantizeQ8Rows(t *testing.T) {
 
 func TestQuantizeQ8RowsErrors(t *testing.T) {
 	assertError(t, fnQuantizeQ8Rows(ctx, noopKwargs), "2 arguments")
-	assertError(t, fnQuantizeQ8Rows(ctx, noopKwargs, &object.String{Value: "x"}, object.NewInteger(32)), "LIST")
+	assertError(t, fnQuantizeQ8Rows(ctx, noopKwargs, object.NewString("x"), object.NewInteger(32)), "LIST")
 	assertError(t, fnQuantizeQ8Rows(ctx, noopKwargs, floatList(1.0), object.NewInteger(32)), "2D matrix")
 	empty := &object.List{Elements: []object.Object{}}
 	assertError(t, fnQuantizeQ8Rows(ctx, noopKwargs, empty, object.NewInteger(32)), "empty")
