@@ -31,6 +31,7 @@ The library is a single Go package (`scriptlingllmlib`) with these logical group
 | **Attention heads** | `heads.go` | Head splitting, merging, repeat KV |
 | **Helpers** | `helpers.go` | Float conversion utilities |
 | **Concurrency** | `parallel.go` | `parallelFor` — goroutine pool for parallel matmul |
+| **Go public API** | `generate_cached.go` | Exported Go functions for embedding this library in other Go programs |
 
 ## Supported GGUF Tensor Types
 
@@ -45,9 +46,70 @@ The library is a single Go package (`scriptlingllmlib`) with these logical group
 | Q4_K | 144 | 256 | Weight matrices (K-quant) |
 | Q6_K | 210 | 256 | Weight matrices (K-quant, higher precision) |
 
-## Function Reference
+## Go API
 
-All functions are available via `import llm` in Scriptling.
+For embedding this library in other Go programs (without the Scriptling runtime), two exported functions are provided in `generate_cached.go`.
+
+They use the same thread-safe global model+session cache that the Scriptling `llm.generate` built-in uses — so models are loaded once and reused across calls.
+
+### `GenerateWithCache`
+
+```go
+func GenerateWithCache(
+    modelPath    string,
+    prompt       string,
+    maxTokens    int,
+    strategy     string,   // "greedy", "temperature", "top_k", "top_p"
+    temperature  float64,
+    topK         int,
+    topP         float64,
+    repeatPenalty float64,
+    repeatLastN  int,
+    systemPrompt string,
+    templateName string,
+    sessionID    string,   // pass "" to disable session caching
+) (text string, generatedTokens int, promptTokens int, prefillMs float64, decodeMs float64, err error)
+```
+
+Runs inference with the global model cache. If `sessionID` is non-empty the KV cache is persisted between calls, enabling multi-turn conversations without reprocessing prior context.
+
+Return values:
+- `text` — generated text
+- `generatedTokens` — number of tokens produced
+- `promptTokens` — number of tokens in the prompt
+- `prefillMs` — time spent processing the prompt (milliseconds)
+- `decodeMs` — time spent generating tokens (milliseconds)
+
+### `ClearSessionWithCache`
+
+```go
+func ClearSessionWithCache(modelPath string, sessionID string)
+```
+
+Evicts the KV cache for the given `(modelPath, sessionID)` pair. Call this when a conversation is finished to free memory.
+
+### Example
+
+```go
+import scriptlingllmlib "github.com/martinsuchenak/scriptling-llm-lib"
+
+text, nGen, nPrompt, prefillMs, decodeMs, err := scriptlingllmlib.GenerateWithCache(
+    "model.gguf", "Hello!",
+    100, "greedy", 1.0, 50, 0.9, 1.15, 64,
+    "", "", "chat1",
+)
+if err != nil {
+    log.Fatal(err)
+}
+fmt.Printf("%s\n(%.1f t/s)\n", text, float64(nGen)/(decodeMs/1000))
+
+// Free memory when done
+scriptlingllmlib.ClearSessionWithCache("model.gguf", "chat1")
+```
+
+## Scriptling Function Reference
+
+All functions below are available via `import llm` in Scriptling scripts.
 
 ### Text Generation
 
