@@ -52,5 +52,3 @@ func ClearSessionWithCache(modelPath string, sessionID string) {
 	globalModelCacheF32.clearSession(modelPath, sessionID)
 	globalModelCacheF32.mu.Unlock()
 }
-
-
