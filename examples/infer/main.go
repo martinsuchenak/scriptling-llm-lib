@@ -56,8 +56,8 @@ func main() {
 		*repeatPenalty,
 		*repeatLastN,
 		*system,
-		"",  // templateName: empty = auto-detect from model metadata
-		"",  // sessionID: empty = no KV-cache session
+		"", // templateName: empty = auto-detect from model metadata
+		"", // sessionID: empty = no KV-cache session
 	)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
