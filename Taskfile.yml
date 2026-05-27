@@ -42,10 +42,36 @@ tasks:
       - go build ./...
 
   build:examples:
-    desc: Build all example binaries
+    desc: Build example binaries for the native platform
     cmds:
+      - mkdir -p ./bin
       - go build -o ./bin/basic ./examples/basic/
       - go build -o ./bin/sllm ./examples/sllm/
+
+  build:examples:linux:
+    desc: Build example binaries for Linux (amd64 and arm64)
+    cmds:
+      - mkdir -p ./bin/linux_amd64 ./bin/linux_arm64
+      - GOOS=linux GOARCH=amd64 go build -o ./bin/linux_amd64/basic ./examples/basic/
+      - GOOS=linux GOARCH=amd64 go build -o ./bin/linux_amd64/sllm  ./examples/sllm/
+      - GOOS=linux GOARCH=arm64 go build -o ./bin/linux_arm64/basic ./examples/basic/
+      - GOOS=linux GOARCH=arm64 go build -o ./bin/linux_arm64/sllm  ./examples/sllm/
+
+  build:examples:windows:
+    desc: Build example binaries for Windows (amd64 and arm64)
+    cmds:
+      - mkdir -p ./bin/windows_amd64 ./bin/windows_arm64
+      - GOOS=windows GOARCH=amd64 go build -o ./bin/windows_amd64/basic.exe ./examples/basic/
+      - GOOS=windows GOARCH=amd64 go build -o ./bin/windows_amd64/sllm.exe  ./examples/sllm/
+      - GOOS=windows GOARCH=arm64 go build -o ./bin/windows_arm64/basic.exe ./examples/basic/
+      - GOOS=windows GOARCH=arm64 go build -o ./bin/windows_arm64/sllm.exe  ./examples/sllm/
+
+  build:dist:
+    desc: Build example binaries for all platforms (native, Linux, Windows)
+    deps:
+      - build:examples
+      - build:examples:linux
+      - build:examples:windows
 
   run:sllm:
     desc: "Run a script through sllm (usage: task run:sllm -- script.py)"
