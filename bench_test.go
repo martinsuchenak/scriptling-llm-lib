@@ -85,6 +85,57 @@ func BenchmarkQ8DotGroupXF32(b *testing.B) {
 	}
 }
 
+func BenchmarkQ8DotRowsF32(b *testing.B) {
+	group := make([]byte, 34)
+	for i := range group {
+		group[i] = byte(i)
+	}
+	x := make([]float32, 32)
+	for i := range x {
+		x[i] = float32(i) * 0.1
+	}
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		q8DotRowsF32(group, 0, x, 0, 1)
+	}
+}
+
+func BenchmarkQ8DotRowsF32_128groups(b *testing.B) {
+	const groups = 128
+	raw := make([]byte, groups*34)
+	for i := range raw {
+		raw[i] = byte(i)
+	}
+	x := make([]float32, groups*32)
+	for i := range x {
+		x[i] = float32(i) * 0.001
+	}
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		q8DotRowsF32(raw, 0, x, 0, groups)
+	}
+}
+
+func BenchmarkQ8DotGroupXF32_128groups(b *testing.B) {
+	const groups = 128
+	raw := make([]byte, groups*34)
+	for i := range raw {
+		raw[i] = byte(i)
+	}
+	x := make([]float32, groups*32)
+	for i := range x {
+		x[i] = float32(i) * 0.001
+	}
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		var sum float32
+		for g := 0; g < groups; g++ {
+			sum += q8DotGroupXF32(raw, g*34, x, g*32)
+		}
+		_ = sum
+	}
+}
+
 func BenchmarkQ4DotGroupXF32(b *testing.B) {
 	group := make([]byte, 18)
 	for i := range group {
@@ -113,6 +164,28 @@ func BenchmarkFloatMatmulF32(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		modelMatmulFloatF32(w, x, 1, n)
+	}
+}
+
+// BenchmarkParallelMatmulQ8 simulates a SmolLM2-135M FFN projection:
+// 576 in_features → 1536 out_features (Q8_0, 18 groups/row).
+// outFeatures=1536 >> parallelFor threshold=256, so this exercises the worker pool.
+func BenchmarkParallelMatmulQ8(b *testing.B) {
+	const inFeatures = 576
+	const outFeatures = 1536
+	flat := make([]float32, outFeatures*inFeatures)
+	for i := range flat {
+		flat[i] = float32(i%127) * 0.01
+	}
+	w := quantizeQ8RowsF32(flat, outFeatures, inFeatures)
+	x := make([]float32, inFeatures)
+	for i := range x {
+		x[i] = float32(i) * 0.001
+	}
+	dst := make([]float32, outFeatures)
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		modelMatmulRowQuantIntoF32(w, x, dst)
 	}
 }
 

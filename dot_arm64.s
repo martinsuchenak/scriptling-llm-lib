@@ -4,19 +4,26 @@
 
 // func q8DotRowsAsm(rawPtr *byte, xPtr *float32, groups int) float32
 //
-// Scalar arm64 implementation using FCVTHS for f16→f32 conversion.
-// Each Q8_0 group: 2-byte f16 scale + 32 int8 = 34 bytes.
-// x data: 32 float32 per group = 128 bytes per group.
+// NEON ARM64 implementation. Each Q8_0 group: 2-byte f16 scale + 32 int8 = 34 bytes.
+// x data: 32 float32 per group = 128 bytes.
 //
-// TODO: Replace with NEON SIMD using WORD directives for instructions
-// not supported by Go's arm64 assembler (SHLL, SCVTF vector, FMUL vector, ADDV).
-// The scalar version processes 4 elements per iteration using SCVTFS + FMULS.
+// Per group:
+//   1. Load f16 scale → scalar F8 (FCVTHS); F8 chosen to avoid V0 conflict
+//   2. Preload all 32 x-values into V16..V23 (8 × 4S vectors via VLD1.P)
+//   3. Load first 16 int8 → V0.B16; WORD-encoded SSHLL chain extends
+//      int8→int16→int32; SCVTF converts int32→f32 (V3..V6); VFMLA
+//      accumulates into V26.S4 against V16..V19
+//   4. Same for last 16 int8 against V20..V23
+//   5. WORD-encoded FADDP reduces V26.S4 → scalar S25 (=F25); F24 += F25 * F8
 //
-// ABI0 stack layout:
-//   rawPtr  +0(FP)  8 bytes
-//   xPtr    +8(FP)  8 bytes
-//   groups  +16(FP) 8 bytes
-//   ret     +24(FP) 4 bytes
+// WORD encodings used for instructions unsupported by Go's assembler:
+//   SSHLL  Vd.8H, Vn.8B, #0  = 0x0F08A400 | (Vn<<5) | Vd  (bit10=1 required)
+//   SSHLL2 Vd.8H, Vn.16B, #0 = 0x4F08A400 | (Vn<<5) | Vd
+//   SSHLL  Vd.4S, Vn.4H, #0  = 0x0F10A400 | (Vn<<5) | Vd
+//   SSHLL2 Vd.4S, Vn.8H, #0  = 0x4F10A400 | (Vn<<5) | Vd
+//   SCVTF  Vd.4S, Vn.4S      = 0x4E21D800 | (Vn<<5) | Vd
+//   FADDP  Vd.4S, Vn.4S, Vm.4S = 0x6E20D400 | (Vm<<16) | (Vn<<5) | Vd
+//   FADDP  Sd, Vn.2S          = 0x7E30D800 | (Vn<<5) | Rd
 
 TEXT ·q8DotRowsAsm(SB), NOSPLIT, $0-28
 	MOVD rawPtr+0(FP), R0
@@ -29,199 +36,106 @@ loop:
 	CBZ R2, done
 	SUB $1, R2, R2
 
-	// f16 scale → f32 via FCVTHS
-	MOVHU (R0), R3
-	FMOVD R3, F0
-	FCVTHS F0, F0
+	// Prefetch the cache line starting ~2 groups ahead (64 bytes = 8×8, valid for PRFM imm).
+	// Groups are 34 bytes each; +64 lands in the cache line [64,127] that covers groups i+2
+	// and i+3, hiding L2/L3 latency behind the current group's NEON computation.
+	PRFM 64(R0), $0
 
-	// int8 data starts at raw+2
+	// f16 scale → f32 in F8 (V0 is used for int8 data, must not overlap)
+	MOVHU (R0), R3
+	FMOVD R3, F8
+	FCVTHS F8, F8
+
+	// Preload all 32 x-values (128 bytes) into V16..V23
+	MOVD   R1, R11
+	VLD1.P 16(R11), [V16.S4]
+	VLD1.P 16(R11), [V17.S4]
+	VLD1.P 16(R11), [V18.S4]
+	VLD1.P 16(R11), [V19.S4]
+	VLD1.P 16(R11), [V20.S4]
+	VLD1.P 16(R11), [V21.S4]
+	VLD1.P 16(R11), [V22.S4]
+	VLD1.P 16(R11), [V23.S4]
+
+	// Clear per-group accumulator V26
+	VEOR V26.B16, V26.B16, V26.B16
+
+	// R4 = int8 data start (raw+2); VLD1.P will advance R4
 	ADD $2, R0, R4
 
-	// Process 32 int8 × float32, 4 at a time (8 iterations)
-	// Accumulate in F25, then multiply by scale
-	FMOVS $0, F25
+	// === First 16 int8 (elements 0..15) ===
+	VLD1.P 16(R4), [V0.B16]         // load int8[0..15], R4 += 16
 
-	// iter 0: elements 0-3
-	MOVB (R4), R6
-	MOVB 1(R4), R7
-	MOVB 2(R4), R8
-	MOVB 3(R4), R9
-	SCVTFS R6, F1
-	SCVTFS R7, F2
-	SCVTFS R8, F3
-	SCVTFS R9, F4
-	FMOVS (R1), F5
-	FMOVS 4(R1), F6
-	FMOVS 8(R1), F7
-	FMOVS 12(R1), F8
-	FMULS F1, F5, F1
-	FMULS F2, F6, F2
-	FMULS F3, F7, F3
-	FMULS F4, F8, F4
-	FADDS F1, F2, F1
-	FADDS F3, F4, F3
-	FADDS F1, F3, F1
-	FADDS F1, F25, F25
+	// SSHLL  V1.8H, V0.8B, #0   — sign-extend lower 8 bytes to 8×int16
+	WORD $0x0F08A401
+	// SSHLL2 V2.8H, V0.16B, #0  — sign-extend upper 8 bytes to 8×int16
+	WORD $0x4F08A402
+	// SSHLL  V3.4S, V1.4H, #0   — sign-extend lower 4 int16 to 4×int32
+	WORD $0x0F10A423
+	// SSHLL2 V4.4S, V1.8H, #0   — sign-extend upper 4 int16 to 4×int32
+	WORD $0x4F10A424
+	// SSHLL  V5.4S, V2.4H, #0   — sign-extend lower 4 int16 to 4×int32
+	WORD $0x0F10A445
+	// SSHLL2 V6.4S, V2.8H, #0   — sign-extend upper 4 int16 to 4×int32
+	WORD $0x4F10A446
 
-	// iter 1: elements 4-7
-	MOVB 4(R4), R6
-	MOVB 5(R4), R7
-	MOVB 6(R4), R8
-	MOVB 7(R4), R9
-	SCVTFS R6, F1
-	SCVTFS R7, F2
-	SCVTFS R8, F3
-	SCVTFS R9, F4
-	FMOVS 16(R1), F5
-	FMOVS 20(R1), F6
-	FMOVS 24(R1), F7
-	FMOVS 28(R1), F8
-	FMULS F1, F5, F1
-	FMULS F2, F6, F2
-	FMULS F3, F7, F3
-	FMULS F4, F8, F4
-	FADDS F1, F2, F1
-	FADDS F3, F4, F3
-	FADDS F1, F3, F1
-	FADDS F1, F25, F25
+	// SCVTF V3.4S, V3.4S  — int32 → float32
+	WORD $0x4E21D863
+	// SCVTF V4.4S, V4.4S
+	WORD $0x4E21D884
+	// SCVTF V5.4S, V5.4S
+	WORD $0x4E21D8A5
+	// SCVTF V6.4S, V6.4S
+	WORD $0x4E21D8C6
 
-	// iter 2: elements 8-11
-	MOVB 8(R4), R6
-	MOVB 9(R4), R7
-	MOVB 10(R4), R8
-	MOVB 11(R4), R9
-	SCVTFS R6, F1
-	SCVTFS R7, F2
-	SCVTFS R8, F3
-	SCVTFS R9, F4
-	FMOVS 32(R1), F5
-	FMOVS 36(R1), F6
-	FMOVS 40(R1), F7
-	FMOVS 44(R1), F8
-	FMULS F1, F5, F1
-	FMULS F2, F6, F2
-	FMULS F3, F7, F3
-	FMULS F4, F8, F4
-	FADDS F1, F2, F1
-	FADDS F3, F4, F3
-	FADDS F1, F3, F1
-	FADDS F1, F25, F25
+	// V26 += V3..V6 * x[0..15]  (FMLA V26.4S, Vn.4S, Vm.4S)
+	VFMLA V3.S4,  V16.S4, V26.S4
+	VFMLA V4.S4,  V17.S4, V26.S4
+	VFMLA V5.S4,  V18.S4, V26.S4
+	VFMLA V6.S4,  V19.S4, V26.S4
 
-	// iter 3: elements 12-15
-	MOVB 12(R4), R6
-	MOVB 13(R4), R7
-	MOVB 14(R4), R8
-	MOVB 15(R4), R9
-	SCVTFS R6, F1
-	SCVTFS R7, F2
-	SCVTFS R8, F3
-	SCVTFS R9, F4
-	FMOVS 48(R1), F5
-	FMOVS 52(R1), F6
-	FMOVS 56(R1), F7
-	FMOVS 60(R1), F8
-	FMULS F1, F5, F1
-	FMULS F2, F6, F2
-	FMULS F3, F7, F3
-	FMULS F4, F8, F4
-	FADDS F1, F2, F1
-	FADDS F3, F4, F3
-	FADDS F1, F3, F1
-	FADDS F1, F25, F25
+	// === Second 16 int8 (elements 16..31) ===
+	VLD1 (R4), [V0.B16]
 
-	// iter 4: elements 16-19
-	MOVB 16(R4), R6
-	MOVB 17(R4), R7
-	MOVB 18(R4), R8
-	MOVB 19(R4), R9
-	SCVTFS R6, F1
-	SCVTFS R7, F2
-	SCVTFS R8, F3
-	SCVTFS R9, F4
-	FMOVS 64(R1), F5
-	FMOVS 68(R1), F6
-	FMOVS 72(R1), F7
-	FMOVS 76(R1), F8
-	FMULS F1, F5, F1
-	FMULS F2, F6, F2
-	FMULS F3, F7, F3
-	FMULS F4, F8, F4
-	FADDS F1, F2, F1
-	FADDS F3, F4, F3
-	FADDS F1, F3, F1
-	FADDS F1, F25, F25
+	// SSHLL  V1.8H, V0.8B, #0
+	WORD $0x0F08A401
+	// SSHLL2 V2.8H, V0.16B, #0
+	WORD $0x4F08A402
+	// SSHLL  V3.4S, V1.4H, #0
+	WORD $0x0F10A423
+	// SSHLL2 V4.4S, V1.8H, #0
+	WORD $0x4F10A424
+	// SSHLL  V5.4S, V2.4H, #0
+	WORD $0x0F10A445
+	// SSHLL2 V6.4S, V2.8H, #0
+	WORD $0x4F10A446
 
-	// iter 5: elements 20-23
-	MOVB 20(R4), R6
-	MOVB 21(R4), R7
-	MOVB 22(R4), R8
-	MOVB 23(R4), R9
-	SCVTFS R6, F1
-	SCVTFS R7, F2
-	SCVTFS R8, F3
-	SCVTFS R9, F4
-	FMOVS 80(R1), F5
-	FMOVS 84(R1), F6
-	FMOVS 88(R1), F7
-	FMOVS 92(R1), F8
-	FMULS F1, F5, F1
-	FMULS F2, F6, F2
-	FMULS F3, F7, F3
-	FMULS F4, F8, F4
-	FADDS F1, F2, F1
-	FADDS F3, F4, F3
-	FADDS F1, F3, F1
-	FADDS F1, F25, F25
+	// SCVTF V3.4S, V3.4S
+	WORD $0x4E21D863
+	// SCVTF V4.4S, V4.4S
+	WORD $0x4E21D884
+	// SCVTF V5.4S, V5.4S
+	WORD $0x4E21D8A5
+	// SCVTF V6.4S, V6.4S
+	WORD $0x4E21D8C6
 
-	// iter 6: elements 24-27
-	MOVB 24(R4), R6
-	MOVB 25(R4), R7
-	MOVB 26(R4), R8
-	MOVB 27(R4), R9
-	SCVTFS R6, F1
-	SCVTFS R7, F2
-	SCVTFS R8, F3
-	SCVTFS R9, F4
-	FMOVS 96(R1), F5
-	FMOVS 100(R1), F6
-	FMOVS 104(R1), F7
-	FMOVS 108(R1), F8
-	FMULS F1, F5, F1
-	FMULS F2, F6, F2
-	FMULS F3, F7, F3
-	FMULS F4, F8, F4
-	FADDS F1, F2, F1
-	FADDS F3, F4, F3
-	FADDS F1, F3, F1
-	FADDS F1, F25, F25
+	// V26 += V3..V6 * x[16..31]
+	VFMLA V3.S4,  V20.S4, V26.S4
+	VFMLA V4.S4,  V21.S4, V26.S4
+	VFMLA V5.S4,  V22.S4, V26.S4
+	VFMLA V6.S4,  V23.S4, V26.S4
 
-	// iter 7: elements 28-31
-	MOVB 28(R4), R6
-	MOVB 29(R4), R7
-	MOVB 30(R4), R8
-	MOVB 31(R4), R9
-	SCVTFS R6, F1
-	SCVTFS R7, F2
-	SCVTFS R8, F3
-	SCVTFS R9, F4
-	FMOVS 112(R1), F5
-	FMOVS 116(R1), F6
-	FMOVS 120(R1), F7
-	FMOVS 124(R1), F8
-	FMULS F1, F5, F1
-	FMULS F2, F6, F2
-	FMULS F3, F7, F3
-	FMULS F4, F8, F4
-	FADDS F1, F2, F1
-	FADDS F3, F4, F3
-	FADDS F1, F3, F1
-	FADDS F1, F25, F25
+	// Horizontal float sum: V26.S4 → F25
+	// FADDP V27.4S, V26.4S, V26.4S — pairwise: V27[0]=V26[0]+V26[1], V27[1]=V26[2]+V26[3]
+	WORD $0x6E3AD75B
+	// FADDP S25, V27.2S — scalar: F25 = V27[0]+V27[1]
+	WORD $0x7E30DB79
 
-	// Multiply group sum by scale, accumulate
-	FMULS F25, F0, F25
+	// Accumulate: F24 += F25 * scale (scale is in F8)
+	FMULS F25, F8, F25
 	FADDS F25, F24, F24
 
-	// Advance pointers
+	// Advance pointers: raw += 34, x += 128
 	ADD $34, R0, R0
 	ADD $128, R1, R1
 
