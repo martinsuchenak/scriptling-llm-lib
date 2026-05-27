@@ -2,6 +2,8 @@
 
 Go library providing LLM inference primitives for the [Scriptling](https://github.com/paularlott/scriptling) runtime. Registered as the `llm` Scriptling library.
 
+→ [Performance benchmarks](BENCHMARKS.md) — M2 Max / M5 Max / Intel Xeon (AVX2), SmolLM2 135M–1.7B Q8_0
+
 ## Quick Start
 
 ```python
@@ -238,6 +240,8 @@ go run ./examples/basic/
 task test              # unit tests
 task smoke             # end-to-end generation against all downloaded models
 ```
+
+See [BENCHMARKS.md](BENCHMARKS.md) for measured decode/prefill throughput across platforms.
 
 ## Sessions
 
