@@ -23,7 +23,7 @@ loop:
 	JZ    done
 	DECQ  CX
 
-	PREFETCHT1 64(AX)
+	PREFETCHT1 320(AX)       // ~9 groups ahead to cover ~200-cycle DRAM latency
 
 	// --- f16 → f32 via F16C (2 instructions vs ~11) ---
 	// Load the 2-byte f16 scale into the low 16 bits of X0, then

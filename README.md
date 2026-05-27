@@ -17,11 +17,11 @@ The library is a single Go package (`scriptlingllmlib`) with these logical group
 | Area | Files | Description |
 |------|-------|-------------|
 | **Library registration** | `llm.go` | Registers 55+ functions as the `llm` Scriptling library |
-| **Model loading** | `gguf.go` | GGUF v3 parser — F32, F16, Q4_0, Q4_1, Q5_0, Q8_0, Q4_K, Q6_K |
+| **Model loading** | `gguf.go` | GGUF v3 parser — F32, F16, Q4_0, Q4_1, Q5_0, Q8_0 |
 | **Inference model** | `model.go` | Transformer forward pass, KV cache, autoregressive generation |
 | **Tokenizer** | `tokenizer.go` | BPE tokenizer with sentencepiece + GPT-2 byte-fallback |
 | **Chat templates** | `chat_template.go` | ChatML/Jinja2 template rendering |
-| **Quantized matmul** | `q8_fast.go`, `q4k.go`, `q5_fast.go`, `q6k.go` | Fused quantized dot products (Q4, Q4_1, Q5, Q8, Q4_K, Q6_K) |
+| **Quantized matmul** | `q8_fast.go`, `q5_fast.go` | Fused quantized dot products (Q4_0, Q4_1, Q5_0, Q8_0) |
 | **Quantize/dequantize** | `quantize.go` | Float-to-Q8 conversion, dequant helpers |
 | **Fused ops** | `fused.go`, `fused_ops.go`, `fused_block.go` | Linear layers, RMS norm, RoPE, attention, FFN, output logits |
 | **Primitives** | `llm_primitives.go` | Vector ops, activations, head splitting/merging, repeat KV |
@@ -43,8 +43,8 @@ The library is a single Go package (`scriptlingllmlib`) with these logical group
 | Q4_1 | 20 | 32 | Weight matrices (with min offset) |
 | Q5_0 | 22 | 32 | Weight matrices |
 | Q8_0 | 34 | 32 | Weight matrices, token embeddings |
-| Q4_K | 144 | 256 | Weight matrices (K-quant) |
-| Q6_K | 210 | 256 | Weight matrices (K-quant, higher precision) |
+
+K-quant types (Q4_K, Q4_K_M, Q6_K, etc.) are not supported. Use `_Q8_0` or `_Q4_0` variants from [bartowski's GGUF collection](https://huggingface.co/bartowski).
 
 ## Go API
 
@@ -129,10 +129,8 @@ All functions below are available via `import llm` in Scriptling scripts.
 
 - `llm.linear_q8(x, raw, groups_per_row)` — Q8_0 quantized linear
 - `llm.linear_q4(x, raw, groups_per_row)` — Q4_0 quantized linear
-- `llm.linear_q4_k(x, raw, blocks_per_row)` — Q4_K quantized linear
 - `llm.dequantize_q8(raw, scales, groups)` — Q8_0 dequantization
 - `llm.dequantize_q4_0(raw, n_groups)` — Q4_0 dequantization
-- `llm.dequantize_q4_k(raw, n_blocks)` — Q4_K dequantization
 
 ### Transformer Primitives
 
@@ -164,22 +162,82 @@ All functions below are available via `import llm` in Scriptling scripts.
 - `llm.concat_rows(a, b)`, `llm.slice_rows(m, start, end)` — Row ops
 - `llm.VERSION` — Library version string
 
-## Performance
-
-Benchmarks on Apple M2 Max, greedy decoding, 40 generated tokens:
-
-| Model | Q8_0 tok/s | Q4_K_M tok/s |
-|-------|-----------|--------------|
-| SmolLM2 135M | 29.7 | 20.6 |
-| SmolLM2 360M | 13.8 | 9.6 |
-| SmolLM2 1.7B | 3.4 | — |
-
 ## Examples
 
-- `examples/basic/` — Minimal Go program calling LLM primitives
-- `examples/sllm/` — Full Scriptling CLI runtime (the `sllm` binary)
-- `examples/generate/` — Text generation script for `sllm`
-- `examples/session/` — Multi-turn chat with persistent KV cache sessions
+### Getting models
+
+Download a set of compatible Q8_0 and Q4_0 GGUF models (~5 GB):
+
+```bash
+task models:download
+```
+
+Additional models (Llama 3.2 1B, Qwen2.5 0.5B, Qwen3 1.7B):
+
+```bash
+task models:download:extra
+```
+
+Models are saved to `models/`. Remove them with `task models:clean`.
+
+### Building
+
+```bash
+task build:examples          # native platform
+task build:examples:linux    # linux/amd64 + linux/arm64
+task build:examples:windows  # windows/amd64 + windows/arm64
+```
+
+Binaries land in `bin/`.
+
+### `examples/infer/` — standalone inference CLI
+
+No scripting required. Pass the model, prompt and options as flags; response goes to stdout, stats to stderr.
+
+```bash
+# Greedy decoding
+./bin/infer -model models/SmolLM2-360M-Instruct-Q8_0.gguf \
+            -prompt "Explain recursion in one paragraph" -tokens 150
+
+# Nucleus sampling
+./bin/infer -model models/SmolLM2-1.7B-Instruct-Q8_0.gguf \
+            -prompt "Write a haiku about Go" \
+            -strategy top_p -temperature 0.9 -tokens 60
+
+# With a system prompt
+./bin/infer -model models/SmolLM2-1.7B-Instruct-Q8_0.gguf \
+            -system "Answer in one sentence." \
+            -prompt "What is SIMD?" -tokens 80
+```
+
+### `examples/sllm/` — Scriptling runtime with `llm` library
+
+Full CLI runtime for running `.py` Scriptling scripts that call `llm.*` functions.
+
+```bash
+# Single generation via the bundled run.py script
+./bin/sllm examples/generate/run.py \
+    models/SmolLM2-360M-Instruct-Q8_0.gguf "Hello" 40 greedy stats
+
+# Interactive multi-turn chat with session caching
+./bin/sllm examples/session/chat.py \
+    models/SmolLM2-1.7B-Instruct-Q8_0.gguf 100 greedy
+```
+
+### `examples/basic/` — LLM primitives demo
+
+Runs a Scriptling script inline demonstrating activation functions, vector ops, quantized matmul, attention, and other primitives. No model file needed.
+
+```bash
+go run ./examples/basic/
+```
+
+### Testing
+
+```bash
+task test              # unit tests
+task smoke             # end-to-end generation against all downloaded models
+```
 
 ## Sessions
 

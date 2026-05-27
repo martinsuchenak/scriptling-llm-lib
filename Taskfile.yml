@@ -47,6 +47,7 @@ tasks:
       - mkdir -p ./bin
       - go build -o ./bin/basic ./examples/basic/
       - go build -o ./bin/sllm ./examples/sllm/
+      - go build -o ./bin/infer ./examples/infer/
 
   build:examples:linux:
     desc: Build example binaries for Linux (amd64 and arm64)
@@ -54,8 +55,10 @@ tasks:
       - mkdir -p ./bin/linux_amd64 ./bin/linux_arm64
       - GOOS=linux GOARCH=amd64 go build -o ./bin/linux_amd64/basic ./examples/basic/
       - GOOS=linux GOARCH=amd64 go build -o ./bin/linux_amd64/sllm  ./examples/sllm/
+      - GOOS=linux GOARCH=amd64 go build -o ./bin/linux_amd64/infer ./examples/infer/
       - GOOS=linux GOARCH=arm64 go build -o ./bin/linux_arm64/basic ./examples/basic/
       - GOOS=linux GOARCH=arm64 go build -o ./bin/linux_arm64/sllm  ./examples/sllm/
+      - GOOS=linux GOARCH=arm64 go build -o ./bin/linux_arm64/infer ./examples/infer/
 
   build:examples:windows:
     desc: Build example binaries for Windows (amd64 and arm64)
@@ -63,8 +66,10 @@ tasks:
       - mkdir -p ./bin/windows_amd64 ./bin/windows_arm64
       - GOOS=windows GOARCH=amd64 go build -o ./bin/windows_amd64/basic.exe ./examples/basic/
       - GOOS=windows GOARCH=amd64 go build -o ./bin/windows_amd64/sllm.exe  ./examples/sllm/
+      - GOOS=windows GOARCH=amd64 go build -o ./bin/windows_amd64/infer.exe ./examples/infer/
       - GOOS=windows GOARCH=arm64 go build -o ./bin/windows_arm64/basic.exe ./examples/basic/
       - GOOS=windows GOARCH=arm64 go build -o ./bin/windows_arm64/sllm.exe  ./examples/sllm/
+      - GOOS=windows GOARCH=arm64 go build -o ./bin/windows_arm64/infer.exe ./examples/infer/
 
   build:dist:
     desc: Build example binaries for all platforms (native, Linux, Windows)

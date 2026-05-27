@@ -25,8 +25,8 @@ loop:
 	JZ    done
 	DECQ  CX
 
-	// Prefetch ~2 groups ahead to hide memory latency on cold caches.
-	PREFETCHT1 64(AX)
+	// Prefetch ~9 groups ahead to cover DRAM latency (~200 cycles / ~18 cycles-per-group).
+	PREFETCHT1 320(AX)
 
 	// --- f16 → f32 (inline integer decode, no F16C required) ---
 	MOVWQZX (AX), DX

@@ -36,10 +36,9 @@ loop:
 	CBZ R2, done
 	SUB $1, R2, R2
 
-	// Prefetch the cache line starting ~2 groups ahead (64 bytes = 8×8, valid for PRFM imm).
-	// Groups are 34 bytes each; +64 lands in the cache line [64,127] that covers groups i+2
-	// and i+3, hiding L2/L3 latency behind the current group's NEON computation.
-	PRFM 64(R0), $0
+	// Prefetch ~9 groups ahead to cover DRAM latency (~200 cycles / ~22 cycles-per-group).
+	// 9 × 34 = 306 bytes; round to 320 for cache-line alignment.
+	PRFM 320(R0), $0
 
 	// f16 scale → f32 in F8 (V0 is used for int8 data, must not overlap)
 	MOVHU (R0), R3
