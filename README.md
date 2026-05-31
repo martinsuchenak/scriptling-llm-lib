@@ -252,6 +252,7 @@ The library auto-tunes itself to the host CPU at startup; in most cases nothing 
 - *Float SIMD* (AVX2/F16C/SSE, or NEON on ARM) — int8 weights × float32 activations. Fast on most hardware.
 - *Scalar Go* — fallback for hosts where float SIMD is penalized (some VMs force AVX2/F16C down a slow path, where scalar wins by a wide margin).
 - *Q8×Q8* — quantizes activations to int8 so the hot loop is pure-integer SIMD (`VPMADDWD`). On hosts where the *float* SIMD path is penalized but the *integer* pipeline is not (e.g. an AMD Ryzen 7 4700U VM), this is ~3.6× faster than scalar at the kernel level and roughly doubles decode throughput. Costs ~1% activation-quantization error (negligible for inference).
+- *Q4×Q8* — Q4_0 has no float SIMD kernel, so a fused AVX2 kernel decodes the 4-bit weights in SIMD and dots them against int8 activations in one pass — ~10× the old scalar Q4 path at the kernel level (e.g. ~1.8 → ~6.6 t/s decode on a 135M in the 4700U VM). Q4_0 halves weight bandwidth vs Q8_0, which matters for larger models that are memory-bound.
 
 The selector picks whichever actually wins on the host, so no configuration is needed.
 

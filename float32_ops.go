@@ -390,6 +390,10 @@ func modelMatmulQuantIntoF32(w *QuantWeight, xData []float32, xRows, xCols int, 
 			}
 		})
 	case "q4":
+		if useInt8Q4 {
+			q4q8MatmulInto(w, xData, xRows, xCols, result)
+			return result, xRows, outFeatures
+		}
 		groupsPerRow := w.Groups
 		rowBytes := groupsPerRow * 18
 		parallelFor(xRows*outFeatures, func(start, end int) {
@@ -601,6 +605,10 @@ func modelMatmulRowQuantIntoF32(w *QuantWeight, normed []float32, dst []float32)
 		})
 		return result
 	case "q4":
+		if useInt8Q4 {
+			q4q8MatmulInto(w, normed, 1, w.Cols, result)
+			return result
+		}
 		groupsPerRow := w.Groups
 		rowBytes := groupsPerRow * 18
 		parallelFor(outFeatures, func(start, end int) {

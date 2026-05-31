@@ -60,10 +60,13 @@ func init() {
 	switch os.Getenv("SLLM_Q8_KERNEL") {
 	case "int8":
 		useInt8Q8 = true
+		useInt8Q4 = true
 	case "float":
 		useInt8Q8 = false
+		useInt8Q4 = false
 	default:
 		useInt8Q8 = shouldUseInt8Q8()
+		useInt8Q4 = shouldUseInt8Q4()
 	}
 }
 
