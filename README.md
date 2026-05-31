@@ -255,7 +255,7 @@ The library auto-tunes itself to the host CPU at startup; in most cases nothing 
 
 The selector picks whichever actually wins on the host, so no configuration is needed.
 
-**Parallelism threshold** — `SLLM_PARALLEL_THRESHOLD` (env var, integer). Loops with fewer than this many items run serially instead of being split across worker goroutines. Fork/join has real cost (goroutine wakeup + sync), so on hosts where it is expensive, splitting the small per-token decode matmuls is a net loss. The default is `256`, raised automatically to `8192` on hosts detected to penalize SIMD/fork-join (the same ones that select the int8 kernel) so those small matmuls stay serial while the large prefill and output projections still parallelize. Bare metal and Apple silicon keep `256` unchanged.
+**Parallelism threshold** — `SLLM_PARALLEL_THRESHOLD` (env var, integer). Loops with fewer than this many items run serially instead of being split across worker goroutines. Fork/join has real cost (goroutine wakeup + sync), so on hosts where it is expensive, splitting the small per-token decode matmuls is a net loss. At startup the library measures whether splitting a decode-sized matmul actually beats running it serially and picks `256` (parallelize aggressively — bare metal, Apple silicon) or `8192` (keep small matmuls serial, parallelize only the large prefill/output projections — hosts with expensive fork/join, e.g. some VMs). This is measured directly and is independent of the kernel choice, so a bare-metal box that prefers the int8 kernel still parallelizes aggressively.
 
 ```bash
 # Parallelize aggressively (fast bare metal with cheap goroutine wakeup)

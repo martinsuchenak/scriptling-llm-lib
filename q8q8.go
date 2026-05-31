@@ -65,11 +65,6 @@ func init() {
 	default:
 		useInt8Q8 = shouldUseInt8Q8()
 	}
-
-	// useInt8Q8 is true exactly on hosts where the float SIMD path is penalized
-	// (constrained VMs); those same hosts have expensive fork/join, so raise the
-	// parallel threshold there. Bare metal and Apple silicon keep the default.
-	resolveParThreshold(useInt8Q8)
 }
 
 func int8DotScalar(aPtr, bPtr *int8, n int) int32 {
