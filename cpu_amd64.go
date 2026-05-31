@@ -11,8 +11,13 @@ func init() {
 		simd = q8DotRowsAsmAVX2
 	case cpuHasF16C():
 		simd = q8DotRowsAsmF16C
-	default:
+	case cpuHasSSE41():
 		simd = q8DotRowsAsmSSE
+	default:
+		// No usable SIMD kernel for this CPU (e.g. pre-SSE4.1). Use scalar and
+		// do not benchmark the asm kernels — calling them would fault.
+		q8DotRowsImpl = q8DotRowsScalar
+		return
 	}
 
 	// The SIMD kernels are normally faster than scalar, but on some virtualized

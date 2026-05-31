@@ -15,6 +15,10 @@ func q8DotRowsAsmF16C(rawPtr *byte, xPtr *float32, groups int) float32
 //go:noescape
 func q8DotRowsAsmAVX2(rawPtr *byte, xPtr *float32, groups int) float32
 
+// cpuHasSSE41 returns true when the CPU reports SSE4.1 support, required by the
+// SSE fallback kernel (PMOVSXBD).
+func cpuHasSSE41() bool
+
 // cpuHasF16C returns true when the CPU reports OSXSAVE + F16C support.
 func cpuHasF16C() bool
 
