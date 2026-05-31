@@ -243,6 +243,36 @@ task smoke             # end-to-end generation against all downloaded models
 
 See [BENCHMARKS.md](BENCHMARKS.md) for measured decode/prefill throughput across platforms.
 
+## Performance tuning
+
+The library auto-tunes itself to the host CPU at startup; in most cases nothing needs configuring.
+
+**Quantized matmul kernel.** Init micro-benchmarks the available Q8 kernels and uses the fastest for this machine:
+
+- *Float SIMD* (AVX2/F16C/SSE, or NEON on ARM) — int8 weights × float32 activations. Fast on most hardware.
+- *Scalar Go* — fallback for hosts where float SIMD is penalized (some VMs force AVX2/F16C down a slow path, where scalar wins by a wide margin).
+- *Q8×Q8* — quantizes activations to int8 so the hot loop is pure-integer SIMD (`VPMADDWD`). On hosts where the *float* SIMD path is penalized but the *integer* pipeline is not (e.g. an AMD Ryzen 7 4700U VM), this is ~3.6× faster than scalar at the kernel level and roughly doubles decode throughput. Costs ~1% activation-quantization error (negligible for inference).
+
+The selector picks whichever actually wins on the host, so no configuration is needed.
+
+**Parallelism threshold** — `SLLM_PARALLEL_THRESHOLD` (env var, integer). Loops with fewer than this many items run serially instead of being split across worker goroutines. Fork/join has real cost (goroutine wakeup + sync), so on hosts where it is expensive, splitting the small per-token decode matmuls is a net loss. The default is `256`, raised automatically to `8192` on hosts detected to penalize SIMD/fork-join (the same ones that select the int8 kernel) so those small matmuls stay serial while the large prefill and output projections still parallelize. Bare metal and Apple silicon keep `256` unchanged.
+
+```bash
+# Parallelize aggressively (fast bare metal with cheap goroutine wakeup)
+SLLM_PARALLEL_THRESHOLD=256 ./bin/infer -model model.gguf -prompt "..."
+
+# Force fully serial decode (hosts where fork/join is very expensive)
+SLLM_PARALLEL_THRESHOLD=999999999 ./bin/infer -model model.gguf -prompt "..."
+```
+
+Worker count follows `runtime.NumCPU()`, capped at 8.
+
+**Async preemption** — `GODEBUG=asyncpreemptoff=1` (Go runtime flag). Inference spends most of its time in tight compute loops; on hosts where delivering preemption signals is expensive (notably some VMs), Go's async preemption can add meaningful overhead — measured ~16% of decode CPU on an AMD Ryzen 7 4700U VM, worth ~5–10% throughput to disable. This is a global runtime tradeoff (it can delay GC and goroutine scheduling), so it is opt-in via the environment rather than a default:
+
+```bash
+GODEBUG=asyncpreemptoff=1 ./bin/infer -model model.gguf -prompt "..."
+```
+
 ## Sessions
 
 The `session` kwarg enables multi-turn conversations with persistent KV cache. The first call with a given `session` ID processes the full prompt. Subsequent calls with the same ID only process new tokens, reusing the cached attention state for faster responses.

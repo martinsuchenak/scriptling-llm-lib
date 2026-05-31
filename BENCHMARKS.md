@@ -44,6 +44,8 @@ Decode t/s is the primary metric — it measures sustained autoregressive genera
 
 **Apple Silicon vs Xeon:** M5 Max is ~2× faster; M2 Max is ~1.3–1.4× faster. The Xeon result is from a VM (additional virtualisation overhead) and uses AVX2 whereas native bare-metal x86 would be higher.
 
+**Kernel auto-selection:** at startup the library micro-benchmarks the available Q8 kernels and uses the fastest — float SIMD (AVX2/F16C/SSE, or NEON on ARM), scalar Go, or a Q8×Q8 path that quantizes activations to int8 for pure-integer SIMD. The Xeon VM above runs the float AVX2 path. Some other virtualized hosts penalize float AVX2/F16C so severely that it loses to scalar; where the *integer* pipeline is still fast there (measured on an AMD Ryzen 7 4700U VM), the Q8×Q8 path wins instead — ~3.6× over scalar at the kernel level, roughly doubling decode. See [Performance tuning](README.md#performance-tuning) for details and the `SLLM_Q8_KERNEL` / `SLLM_PARALLEL_THRESHOLD` knobs.
+
 ---
 
 ## Raw stats
