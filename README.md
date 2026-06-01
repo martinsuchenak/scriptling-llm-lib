@@ -241,7 +241,7 @@ task test              # unit tests
 task smoke             # end-to-end generation against all downloaded models
 ```
 
-See [BENCHMARKS.md](BENCHMARKS.md) for measured decode/prefill throughput across platforms.
+See [BENCHMARKS.md](BENCHMARKS.md) for measured decode/prefill throughput across platforms, and [bench/](bench/README.md) for `fleet.sh` — a harness that cross-compiles `infer`, pushes it plus the selected models to a fleet of remote hosts, and collects benchmarks/CPU profiles in one command.
 
 ## Performance tuning
 

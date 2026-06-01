@@ -1,0 +1,29 @@
+# Fleet host config for bench/fleet.sh — whitespace-separated, '#' comments.
+#
+# Copy this file to bench/hosts.conf and edit it for your setup:
+#     cp bench/hosts.conf.example bench/hosts.conf
+# hosts.conf is git-ignored, so your real hostnames/IPs stay out of the repo.
+#
+# Fields:
+#   name        short label used on the command line
+#   ssh_target  ssh destination (user@host, or a Host alias from ~/.ssh/config);
+#               use "local" to run on this machine without ssh
+#   goos        GOOS to cross-compile for this host (linux | darwin | windows)
+#   goarch      GOARCH (amd64 | arm64)
+#   remote_dir  scratch dir on the remote for the pushed binary
+#   model_dir   directory on the remote for the .gguf models (auto-created and
+#               auto-populated from FLEET_MODELS_SRC by deploy/bench/run/profile)
+#
+# Unix paths may use ~ (but not spaces). Windows hosts need OpenSSH with the
+# default cmd.exe shell; write their paths with forward slashes (C:/...).
+#
+# name      ssh_target        goos    goarch  remote_dir       model_dir
+m2max       user@m2max        darwin  arm64   ~/sllm/bench     ~/sllm/models
+m5max       user@m5max        darwin  arm64   ~/sllm/bench     ~/sllm/models
+9900x       user@9900x        linux   amd64   ~/sllm/bench     ~/sllm/models
+i5          user@i58500t      linux   amd64   ~/sllm/bench     ~/sllm/models
+x5675       user@x5675        linux   amd64   ~/sllm/bench     ~/sllm/models
+local       local             linux   amd64   /tmp/sllm-bench  /path/to/scriptling-llm-lib/models
+# Windows hosts (OpenSSH / cmd.exe, forward-slash paths):
+# win11     user@winbox       windows amd64   C:/Users/me/sllm C:/Users/me/models
+# winarm    user@winarm       windows arm64   C:/Users/me/sllm C:/Users/me/models

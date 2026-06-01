@@ -37,3 +37,4 @@ Thumbs.db
 
 bench/bin/
 bench/*.prof
+bench/hosts.conf
