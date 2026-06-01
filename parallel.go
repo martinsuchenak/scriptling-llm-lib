@@ -5,6 +5,7 @@ import (
 	"runtime"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -106,26 +107,82 @@ func calibrateParThreshold() int {
 	return 8192
 }
 
+// workerPool is a spin-then-park fork/join pool. Workers grab chunks of the
+// current batch via an atomic cursor; between batches they spin briefly before
+// parking on a condition variable. Decode fires ~hundreds of tiny parallel
+// rounds per token, so the spin keeps back-to-back rounds from paying the
+// thread park/wake cost — which is cheap on Linux (futex) but very expensive on
+// macOS (pthread_cond), where the old channel pool spent ~75% of its time.
 type workerPool struct {
-	wg     sync.WaitGroup
-	workCh chan func()
+	fn        func(start, end int) // current batch body
+	n         int                  // current batch size
+	chunk     int                  // rows per chunk
+	numChunks int64                // total chunks this batch
+	nextChunk int64                // atomic cursor into chunks
+	remaining int64                // atomic chunks not yet completed
+	gen       uint64               // atomic batch generation
+	mu        sync.Mutex
+	cond      *sync.Cond
 }
 
 var wpool workerPool
 var wpoolOnce sync.Once
 
+// spinIters is how long an idle worker spins (checking the generation counter)
+// before parking. ~tens of microseconds — long enough to bridge the serial gaps
+// between a token's matmuls, short enough not to burn cores between requests.
+const spinIters = 30000
+
 func initWorkers() {
 	if nWorkers <= 1 {
 		return
 	}
-	wpool.workCh = make(chan func(), nWorkers*4)
-	for i := 0; i < nWorkers; i++ {
-		go func() {
-			for f := range wpool.workCh {
-				f()
-				wpool.wg.Done()
+	wpool.cond = sync.NewCond(&wpool.mu)
+	for i := 1; i < nWorkers; i++ { // main participates as the nWorkers-th
+		go workerLoop()
+	}
+}
+
+func workerLoop() {
+	lastGen := atomic.LoadUint64(&wpool.gen)
+	for {
+		// Wait for the next batch: spin on the generation counter, then park.
+		if atomic.LoadUint64(&wpool.gen) == lastGen {
+			parked := true
+			for s := 0; s < spinIters; s++ {
+				if atomic.LoadUint64(&wpool.gen) != lastGen {
+					parked = false
+					break
+				}
 			}
-		}()
+			if parked {
+				wpool.mu.Lock()
+				for atomic.LoadUint64(&wpool.gen) == lastGen {
+					wpool.cond.Wait()
+				}
+				wpool.mu.Unlock()
+			}
+		}
+		lastGen = atomic.LoadUint64(&wpool.gen)
+		runChunks()
+	}
+}
+
+// runChunks claims and runs chunks of the current batch until none remain.
+func runChunks() {
+	nc := atomic.LoadInt64(&wpool.numChunks)
+	for {
+		c := atomic.AddInt64(&wpool.nextChunk, 1) - 1
+		if c >= nc {
+			return
+		}
+		start := int(c) * wpool.chunk
+		end := start + wpool.chunk
+		if end > wpool.n {
+			end = wpool.n
+		}
+		wpool.fn(start, end)
+		atomic.AddInt64(&wpool.remaining, -1)
 	}
 }
 
@@ -137,26 +194,38 @@ func parallelFor(n int, fn func(start, end int)) {
 	parallelForChunked(n, fn)
 }
 
-// parallelForChunked splits [0,n) into one chunk per worker and runs them on
-// the pool, executing the final chunk inline on the calling goroutine.
+// parallelForChunked splits [0,n) into one chunk per worker and runs the batch
+// on the pool, with the calling goroutine participating, blocking until done.
 func parallelForChunked(n int, fn func(start, end int)) {
 	wpoolOnce.Do(initWorkers)
+	if nWorkers <= 1 {
+		fn(0, n)
+		return
+	}
 	chunk := (n + nWorkers - 1) / nWorkers
 	if chunk < 1 {
 		chunk = 1
 	}
-	for i := 0; i < n; i += chunk {
-		end := i + chunk
-		if end > n {
-			end = n
-		}
-		start := i
-		if i+chunk >= n {
-			fn(start, end)
-			break
-		}
-		wpool.wg.Add(1)
-		wpool.workCh <- func() { fn(start, end) }
+	numChunks := int64((n + chunk - 1) / chunk)
+
+	wpool.fn = fn
+	wpool.n = n
+	wpool.chunk = chunk
+	atomic.StoreInt64(&wpool.numChunks, numChunks)
+	atomic.StoreInt64(&wpool.nextChunk, 0)
+	atomic.StoreInt64(&wpool.remaining, numChunks)
+
+	// Publish the batch (release) and wake any parked workers. Spinning workers
+	// observe the generation bump without taking the lock.
+	wpool.mu.Lock()
+	atomic.AddUint64(&wpool.gen, 1)
+	wpool.cond.Broadcast()
+	wpool.mu.Unlock()
+
+	runChunks() // the caller is a worker too
+
+	// Wait for stragglers (workers finishing their last chunk).
+	for atomic.LoadInt64(&wpool.remaining) > 0 {
+		runtime.Gosched()
 	}
-	wpool.wg.Wait()
 }
