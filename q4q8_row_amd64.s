@@ -11,21 +11,22 @@ DATA q4eight<>+0(SB)/8, $0x0808080808080808
 DATA q4eight<>+8(SB)/8, $0x0808080808080808
 GLOBL q4eight<>(SB), RODATA|NOPTR, $16
 
-// func q4q8RowDotAVX2(wPtr *byte, xqPtr *int8, scalePtr *float32, groups int) float32
+// func q4q8RowDotAVX2(wPtr *byte, xqPtr *int8, xScalePtr *float32, groups int) float32
 //
 // One Q4_0 weight row dotted with a pre-quantized int8 activation vector, in a
 // single call. wPtr points at the row's first 18-byte group (2-byte f16 scale +
 // 16 nibble bytes). Byte j holds weight j in its low nibble and weight j+16 in
 // its high nibble, each a signed value nibble-8. xqPtr holds groups*32 int8
-// activations; scalePtr holds groups float32 *combined* scales (weight × act).
+// activations; xScalePtr holds groups float32 activation scales.
 //
-// The nibble decode happens entirely in SIMD (VPAND/VPSRLW/VPSUBB), so unlike
-// the scalar path there is no per-element Go work. All ops are VEX-encoded to
-// avoid AVX↔SSE transition penalties with the scalar-float scaling.
+// The nibble decode happens entirely in SIMD (VPAND/VPSRLW/VPSUBB) and the
+// per-group f16 weight scale is decoded in-register (VCVTPH2PS) and combined
+// with the activation scale here — so there is no Go-side scale pass and the
+// weights are read once. All ops are VEX-encoded to avoid AVX↔SSE transitions.
 TEXT ·q4q8RowDotAVX2(SB), NOSPLIT, $0-36
 	MOVQ wPtr+0(FP), SI
 	MOVQ xqPtr+8(FP), DI
-	MOVQ scalePtr+16(FP), DX
+	MOVQ xScalePtr+16(FP), DX
 	MOVQ groups+24(FP), CX
 
 	VMOVDQU q4lomask<>(SB), X13 // 0x0F per byte
@@ -77,8 +78,13 @@ loop:
 	VPADDD  X6, X5, X5
 	VMOVD   X5, AX // int32 dot for this group
 
-	VCVTSI2SSL AX, X0, X0   // -> float32
-	VMULSS     (DX), X0, X0 // × combined scale
+	// combined scale = f16 weight scale (group bytes 0..1) × activation scale
+	MOVWLZX   (SI), BX
+	VMOVD     BX, X6
+	VCVTPH2PS X6, X6        // f16 -> f32 (low lane)
+	VMULSS    (DX), X6, X6  // × xScale[g]
+	VCVTSI2SSL AX, X0, X0   // int dot -> float32
+	VMULSS     X6, X0, X0   // × combined scale
 	VADDSS     X0, X15, X15 // accumulate
 
 	ADDQ $18, SI

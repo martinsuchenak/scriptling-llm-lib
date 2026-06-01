@@ -19,8 +19,9 @@ import (
 var useInt8Q4 bool
 
 // q4q8RowFused, when available, decodes + dots a whole Q4_0 row in one call,
-// taking pre-combined (weight × activation) per-group scales.
-var q4q8RowFused func(wPtr *byte, xqPtr *int8, scalePtr *float32, groups int) float32
+// decoding the f16 weight scale in-kernel and taking the per-group activation
+// scales directly.
+var q4q8RowFused func(wPtr *byte, xqPtr *int8, xScalePtr *float32, groups int) float32
 var q4q8FusedAvail bool
 
 // q4q8RowDotScalarDecode is the portable fallback: decode nibbles in Go, then
@@ -60,22 +61,14 @@ func q4q8MatmulInto(w *QuantWeight, xData []float32, xRows, xCols int, dst []flo
 
 	raw := w.Raw
 	if q4q8FusedAvail {
+		// The kernel decodes the f16 weight scale itself, so we pass the
+		// activation scales straight through — no per-row scale pass.
 		parallelFor(xRows*outFeatures, func(start, end int) {
-			cmbP := scalePool.Get().(*[]float32)
-			cmb := growSlice(*cmbP, groups)
 			for idx := start; idx < end; idx++ {
 				xi := idx / outFeatures
 				j := idx % outFeatures
-				wOff := j * rowBytes
-				xsRow := xs[xi*groups:]
-				for g := 0; g < groups; g++ {
-					ro := wOff + g*18
-					cmb[g] = f16LUT[uint16(raw[ro])|uint16(raw[ro+1])<<8] * xsRow[g]
-				}
-				dst[idx] = q4q8RowFused(&raw[wOff], &xq[xi*xCols], &cmb[0], groups)
+				dst[idx] = q4q8RowFused(&raw[j*rowBytes], &xq[xi*xCols], &xs[xi*groups], groups)
 			}
-			*cmbP = cmb
-			scalePool.Put(cmbP)
 		})
 	} else {
 		parallelFor(xRows*outFeatures, func(start, end int) {
