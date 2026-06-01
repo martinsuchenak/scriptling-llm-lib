@@ -37,6 +37,13 @@ var int8Dot = int8DotScalar
 var q8q8RowFused func(wPtr *byte, xqPtr *int8, scalePtr *float32, groups int) float32
 var q8q8FusedAvail bool
 
+// q8q8VNNIAvail enables the AVX-VNNI kernel (q8q8VNNIDot), which needs the
+// per-group correction array (128·Σxq). Set in vnni_amd64.go after a self-check.
+var q8q8VNNIAvail bool
+var q8q8VNNIDot func(wPtr *byte, xqPtr *int8, scalePtr *float32, corrPtr *int32, groups int) float32
+
+var int32Pool = sync.Pool{New: func() interface{} { b := make([]int32, 0, 512); return &b }}
+
 // useInt8Q8 enables the quantized-activation matmul path.
 var useInt8Q8 bool
 
@@ -148,7 +155,40 @@ func q8q8MatmulInto(w *QuantWeight, xData []float32, xRows, xCols int, dst []flo
 	}
 
 	raw := w.Raw
-	if q8q8FusedAvail {
+	if q8q8VNNIAvail {
+		// Per-group activation correction (128·Σxq), shared across weight rows.
+		corrP := int32Pool.Get().(*[]int32)
+		corr := growInt32(*corrP, xRows*groups)
+		for xi := 0; xi < xRows; xi++ {
+			for g := 0; g < groups; g++ {
+				base := xi*xCols + g*32
+				var s int32
+				for k := 0; k < 32; k++ {
+					s += int32(xq[base+k])
+				}
+				corr[xi*groups+g] = 128 * s
+			}
+		}
+		parallelFor(xRows*outFeatures, func(start, end int) {
+			cmbP := scalePool.Get().(*[]float32)
+			cmb := growSlice(*cmbP, groups)
+			for idx := start; idx < end; idx++ {
+				xi := idx / outFeatures
+				j := idx % outFeatures
+				wOff := j * rowBytes
+				xsRow := xs[xi*groups:]
+				for g := 0; g < groups; g++ {
+					ro := wOff + g*34
+					cmb[g] = f16LUT[uint16(raw[ro])|uint16(raw[ro+1])<<8] * xsRow[g]
+				}
+				dst[idx] = q8q8VNNIDot(&raw[wOff], &xq[xi*xCols], &cmb[0], &corr[xi*groups], groups)
+			}
+			*cmbP = cmb
+			scalePool.Put(cmbP)
+		})
+		*corrP = corr
+		int32Pool.Put(corrP)
+	} else if q8q8FusedAvail {
 		parallelFor(xRows*outFeatures, func(start, end int) {
 			// One reusable combined-scale buffer per worker chunk.
 			cmbP := scalePool.Get().(*[]float32)
@@ -188,6 +228,13 @@ func growInt8(b []int8, n int) []int8 {
 		return b[:n]
 	}
 	return make([]int8, n)
+}
+
+func growInt32(b []int32, n int) []int32 {
+	if cap(b) >= n {
+		return b[:n]
+	}
+	return make([]int32, n)
 }
 
 // shouldUseInt8Q8 benchmarks the int8 row dot against the float kernel on a
