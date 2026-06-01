@@ -18,10 +18,10 @@ import (
 
 var useInt8Q4 bool
 
-// q4q8RowFused, when available, decodes + dots a whole Q4_0 row in one call,
-// decoding the f16 weight scale in-kernel and taking the per-group activation
-// scales directly.
-var q4q8RowFused func(wPtr *byte, xqPtr *int8, xScalePtr *float32, groups int) float32
+// q4q8RowFused, when available, decodes + dots a whole Q4_0 row in one call:
+// unsigned-nibble MACs (VPMADDUBSW) with a per-group 8·Σxq correction, the f16
+// weight scale decoded in-kernel, and the per-group activation scales applied.
+var q4q8RowFused func(wPtr *byte, xqPtr *int8, xScalePtr *float32, corrPtr *int32, groups int) float32
 var q4q8FusedAvail bool
 
 // q4q8RowDotScalarDecode is the portable fallback: decode nibbles in Go, then
@@ -61,15 +61,29 @@ func q4q8MatmulInto(w *QuantWeight, xData []float32, xRows, xCols int, dst []flo
 
 	raw := w.Raw
 	if q4q8FusedAvail {
-		// The kernel decodes the f16 weight scale itself, so we pass the
-		// activation scales straight through — no per-row scale pass.
+		// Per-group correction 8·Σxq (the Q4_0 zero point), depends only on the
+		// activations, so compute it once and share across all weight rows.
+		corrP := int32Pool.Get().(*[]int32)
+		corr := growInt32(*corrP, xRows*groups)
+		for xi := 0; xi < xRows; xi++ {
+			for g := 0; g < groups; g++ {
+				base := xi*xCols + g*32
+				var s int32
+				for k := 0; k < 32; k++ {
+					s += int32(xq[base+k])
+				}
+				corr[xi*groups+g] = 8 * s
+			}
+		}
 		parallelFor(xRows*outFeatures, func(start, end int) {
 			for idx := start; idx < end; idx++ {
 				xi := idx / outFeatures
 				j := idx % outFeatures
-				dst[idx] = q4q8RowFused(&raw[j*rowBytes], &xq[xi*xCols], &xs[xi*groups], groups)
+				dst[idx] = q4q8RowFused(&raw[j*rowBytes], &xq[xi*xCols], &xs[xi*groups], &corr[xi*groups], groups)
 			}
 		})
+		*corrP = corr
+		int32Pool.Put(corrP)
 	} else {
 		parallelFor(xRows*outFeatures, func(start, end int) {
 			for idx := start; idx < end; idx++ {
@@ -105,14 +119,18 @@ func shouldUseInt8Q4() bool {
 	xq := make([]int8, groups*32)
 	xs := make([]float32, groups)
 	quantizeActivationsQ8(x, groups, xq, xs)
-	cmb := make([]float32, groups)
+	corr := make([]int32, groups)
 	for g := 0; g < groups; g++ {
-		cmb[g] = f16LUT[uint16(raw[g*18])|uint16(raw[g*18+1])<<8] * xs[g]
+		var s int32
+		for k := 0; k < 32; k++ {
+			s += int32(xq[g*32+k])
+		}
+		corr[g] = 8 * s
 	}
 
 	int8Fn := func() {
 		if q4q8FusedAvail {
-			kernelBenchSink += q4q8RowFused(&raw[0], &xq[0], &cmb[0], groups)
+			kernelBenchSink += q4q8RowFused(&raw[0], &xq[0], &xs[0], &corr[0], groups)
 		} else {
 			kernelBenchSink += q4q8RowDotScalarDecode(raw, 0, xq, xs, groups)
 		}

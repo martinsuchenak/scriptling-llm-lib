@@ -3,7 +3,7 @@
 package scriptlingllmlib
 
 //go:noescape
-func q4q8RowDotAVX2(wPtr *byte, xqPtr *int8, scalePtr *float32, groups int) float32
+func q4q8RowDotAVX2(wPtr *byte, xqPtr *int8, xScalePtr *float32, corrPtr *int32, groups int) float32
 
 func init() {
 	if cpuHasAVX2() {

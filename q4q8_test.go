@@ -72,8 +72,17 @@ func TestQ4FusedMatchesScalarDecode(t *testing.T) {
 		xq := make([]int8, groups*32)
 		xs := make([]float32, groups)
 		quantizeActivationsQ8(x, groups, xq, xs)
-		// The kernel decodes the f16 weight scale itself; pass activation scales.
-		fused := q4q8RowFused(&raw[0], &xq[0], &xs[0], groups)
+		// Kernel decodes the f16 weight scale itself and needs the 8·Σxq
+		// correction; pass activation scales + correction.
+		corr := make([]int32, groups)
+		for g := 0; g < groups; g++ {
+			var s int32
+			for k := 0; k < 32; k++ {
+				s += int32(xq[g*32+k])
+			}
+			corr[g] = 8 * s
+		}
+		fused := q4q8RowFused(&raw[0], &xq[0], &xs[0], &corr[0], groups)
 		scalar := q4q8RowDotScalarDecode(raw, 0, xq, xs, groups)
 		if math.Abs(float64(fused-scalar)) > 1e-3*(math.Abs(float64(scalar))+1) {
 			t.Errorf("groups=%d: fused=%v scalarDecode=%v", groups, fused, scalar)
