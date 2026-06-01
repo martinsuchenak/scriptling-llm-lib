@@ -4,6 +4,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"runtime/pprof"
 
 	scriptlingllmlib "github.com/martinsuchenak/scriptling-llm-lib"
 )
@@ -19,6 +20,7 @@ func main() {
 	topP := flag.Float64("top-p", 0.9, "Nucleus probability threshold (top_p strategy)")
 	repeatPenalty := flag.Float64("repeat-penalty", 1.1, "Repetition penalty — 1.0 disables it")
 	repeatLastN := flag.Int("repeat-last-n", 64, "Token window considered for repeat penalty")
+	profPath := flag.String("prof", "", "Write a CPU profile to this path (for performance analysis)")
 
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage: %s -model <path> -prompt <text> [options]\n\n", os.Args[0])
@@ -43,6 +45,20 @@ func main() {
 		fmt.Fprintln(os.Stderr, "error: -prompt is required")
 		flag.Usage()
 		os.Exit(1)
+	}
+
+	if *profPath != "" {
+		f, err := os.Create(*profPath)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error: cannot create profile %q: %v\n", *profPath, err)
+			os.Exit(1)
+		}
+		defer f.Close()
+		if err := pprof.StartCPUProfile(f); err != nil {
+			fmt.Fprintf(os.Stderr, "error: cannot start profile: %v\n", err)
+			os.Exit(1)
+		}
+		defer pprof.StopCPUProfile()
 	}
 
 	result, nGen, nPrompt, prefillMs, decodeMs, err := scriptlingllmlib.GenerateWithCache(
