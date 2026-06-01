@@ -68,12 +68,15 @@ func init() {
 	case "int8":
 		useInt8Q8 = true
 		useInt8Q4 = true
+		useInt8Q41 = q41q8FusedAvail
 	case "float":
 		useInt8Q8 = false
 		useInt8Q4 = false
+		useInt8Q41 = false
 	default:
 		useInt8Q8 = shouldUseInt8Q8()
 		useInt8Q4 = shouldUseInt8Q4()
+		useInt8Q41 = shouldUseInt8Q41()
 	}
 }
 
