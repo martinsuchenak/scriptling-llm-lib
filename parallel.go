@@ -27,9 +27,19 @@ var nWorkers int
 var parThreshold = 256
 
 func init() {
-	nWorkers = runtime.NumCPU()
-	if nWorkers > 8 {
-		nWorkers = 8
+	// Use all cores up to 8; on bigger machines use NumCPU-2, leaving a couple
+	// of cores spare so idle workers can spin without contending with the main
+	// goroutine (the spare-core fast path below). Capped so the fork/join cost
+	// stays bounded. 8-core and smaller hosts (incl. the constrained VM) are
+	// unchanged.
+	n := runtime.NumCPU()
+	switch {
+	case n <= 8:
+		nWorkers = n
+	case n <= 18:
+		nWorkers = n - 2
+	default:
+		nWorkers = 16
 	}
 	// Idle workers spin before parking. Decode fires many parallel rounds per
 	// token separated by serial gaps (rms-norm, attention); spinning across
