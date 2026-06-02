@@ -50,9 +50,56 @@ K-quant types (Q4_K, Q4_K_M, Q6_K, etc.) are not supported. Use `_Q8_0` or `_Q4_
 
 ## Go API
 
-For embedding this library in other Go programs (without the Scriptling runtime), two exported functions are provided in `generate_cached.go`.
+For embedding this library in other Go programs (without the Scriptling runtime), the package exposes a cached, concurrency-safe generation API. Everything uses the same thread-safe global model+session cache that the Scriptling `llm.generate` built-in uses — so models are loaded once and reused across calls.
 
-They use the same thread-safe global model+session cache that the Scriptling `llm.generate` built-in uses — so models are loaded once and reused across calls.
+### `Generate` (recommended)
+
+The ergonomic entry point takes an options struct (only `Model` and `Prompt` are required; zero fields use sensible defaults) and returns a structured result:
+
+```go
+func Generate(opts GenerateOptions) (GenerateResult, error)
+
+type GenerateOptions struct {
+    Model, Prompt string          // required
+    MaxTokens     int             // default 256
+    Strategy      string          // StrategyGreedy (default) | StrategyTemperature | StrategyTopK | StrategyTopP
+    Temperature   float64         // default 1.0 (non-greedy only)
+    TopK          int             // default 40
+    TopP          float64         // default 0.95
+    RepeatPenalty float64         // default 1.1 (1.0 disables)
+    RepeatLastN   int             // default 64
+    System        string          // system prompt
+    Template      string          // chat template override, e.g. "chatml"
+    Session       string          // persist KV cache under this id; "" disables
+    Context       context.Context // cancellation; nil => no cancellation
+    OnToken       func(delta string) // stream deltas; nil => no streaming
+}
+
+type GenerateResult struct {
+    Text            string
+    GeneratedTokens int
+    PromptTokens    int
+    PrefillMs       float64
+    DecodeMs        float64
+}
+```
+
+```go
+res, err := scriptlingllmlib.Generate(scriptlingllmlib.GenerateOptions{
+    Model:   "model.gguf",
+    Prompt:  "Hello!",
+    Session: "chat1",
+    OnToken: func(d string) { fmt.Print(d) }, // optional streaming
+})
+if err != nil { log.Fatal(err) }
+fmt.Printf("\n(%.1f t/s)\n", float64(res.GeneratedTokens)/(res.DecodeMs/1000))
+```
+
+`Generate` is safe to call from multiple goroutines at once. The model weights are loaded once and shared read-only; each call runs on its own clone of the mutable inference state (KV cache and scratch buffers), so concurrent requests cannot corrupt one another. Turns of the *same* `Session` are serialized (a session is a single conversation). A single in-flight request fans out across all cores; when several requests are in flight, each runs serially and the cores are shared between them — so throughput scales with load without oversubscribing the CPU. If `Context` is cancelled, the error is `ctx.Err()` and `Text` holds the partial output.
+
+### Positional functions
+
+`GenerateWithCache`, `GenerateWithCacheContext`, and `GenerateWithCacheStream` are lower-level variants with positional parameters; `Generate` is built on top of them and is preferred for new code.
 
 ### `GenerateWithCache`
 
