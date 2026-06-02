@@ -38,11 +38,18 @@ func init() {
 	// the 14-core Max chips) so the idle spin never contends with the main
 	// goroutine; otherwise park quickly. This is set before calibration so the
 	// threshold measurement sees the real park/spin behavior.
-	if runtime.NumCPU() > nWorkers {
+	spareCores = runtime.NumCPU() > nWorkers
+	if spareCores {
 		spinIters = 1 << 20
 	}
 	resolveParThreshold()
 }
+
+// spareCores is true when the host has more CPUs than pool workers, so idle
+// spinning never contends with the main goroutine — letting both the worker
+// idle-wait and the completion-wait busy-spin instead of touching the (very
+// expensive on macOS) scheduler.
+var spareCores bool
 
 // resolveParThreshold sets parThreshold. SLLM_PARALLEL_THRESHOLD always wins;
 // otherwise it is calibrated by measuring fork/join on this host.
@@ -241,12 +248,17 @@ func parallelForChunked(n int, fn func(start, end int)) {
 
 	runChunks() // the caller is a worker too
 
-	// Wait for stragglers. Busy-spin (cheap, balanced chunks finish together),
-	// yielding only periodically so an oversubscribed host (workers ≥ cores) can
-	// still schedule a descheduled worker without a hard spin-stall.
-	for spins := 0; atomic.LoadInt64(&wpool.remaining) > 0; spins++ {
-		if spins&1023 == 1023 {
-			runtime.Gosched()
+	// Wait for stragglers. With spare cores, pure busy-spin — touching the
+	// scheduler (Gosched -> usleep) here is itself a big cost on macOS. Without
+	// spare cores, yield periodically so a descheduled worker can still run.
+	if spareCores {
+		for atomic.LoadInt64(&wpool.remaining) > 0 {
+		}
+	} else {
+		for spins := 0; atomic.LoadInt64(&wpool.remaining) > 0; spins++ {
+			if spins&1023 == 1023 {
+				runtime.Gosched()
+			}
 		}
 	}
 }
