@@ -84,6 +84,26 @@ Return values:
 - `prefillMs` — time spent processing the prompt (milliseconds)
 - `decodeMs` — time spent generating tokens (milliseconds)
 
+### `GenerateWithCacheContext`
+
+```go
+func GenerateWithCacheContext(
+    ctx context.Context,
+    // ...same parameters as GenerateWithCache...
+) (text string, generatedTokens int, promptTokens int, prefillMs float64, decodeMs float64, err error)
+```
+
+Same as `GenerateWithCache` but cancellable. When `ctx` is cancelled (client disconnect, deadline) the decode loop stops between tokens and returns the **partial text generated so far** along with `ctx.Err()` (`context.Canceled` or `context.DeadlineExceeded`). Prefill is not interruptible, so cancellation takes effect once decoding begins. `GenerateWithCache` is just this function with `context.Background()`.
+
+```go
+ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+defer cancel()
+text, _, _, _, _, err := scriptlingllmlib.GenerateWithCacheContext(
+    ctx, "model.gguf", prompt, 512, "greedy", 1.0, 50, 0.9, 1.15, 64, "", "", sessionID,
+)
+// err == context.Canceled if the client went away; text holds the partial output.
+```
+
 ### `ClearSessionWithCache`
 
 ```go

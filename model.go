@@ -952,7 +952,7 @@ func fnGenerate(ctx context.Context, kwargs object.Kwargs, args ...object.Object
 
 	tGenStart := time.Now()
 	result, nGen, nPrompt, prefillMs, decodeMs := runGenerate(
-		shared, modelPath.StringValue(), prompt.StringValue(), maxTokens, strategy, temperature,
+		context.Background(), shared, modelPath.StringValue(), prompt.StringValue(), maxTokens, strategy, temperature,
 		topK, topP, repeatPenalty, repeatLastN, systemPrompt, templateName, sessionID,
 	)
 	tGenEnd := time.Now()

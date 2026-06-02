@@ -1,6 +1,7 @@
 package scriptlingllmlib
 
 import (
+	"context"
 	"encoding/binary"
 	"math"
 	"sync"
@@ -68,6 +69,9 @@ type InferenceModelF32 struct {
 	xDataBuf    []float32
 	PrefillMs   float64
 	DecodeMs    float64
+	// ctx, if set, cancels generation between decode steps. It lives on the
+	// per-request clone, so concurrent requests each carry their own.
+	ctx context.Context
 }
 
 func growSlice(b []float32, n int) []float32 {

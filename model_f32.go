@@ -1,6 +1,7 @@
 package scriptlingllmlib
 
 import (
+	"context"
 	"fmt"
 	"math"
 	"strings"
@@ -88,16 +89,20 @@ func (c *modelCacheF32) clearSession(modelPath, sessionID string) {
 // runGenerate runs one generation against the shared (read-only) model. Without
 // a session it uses a throwaway clone; with a session it uses that session's
 // persistent clone and serializes the session's turns. Safe to call concurrently
-// for different (or empty) session IDs.
-func runGenerate(shared *InferenceModelF32, modelPath, prompt string, maxTokens int, strategy string, temperature float64, topK int, topP, repeatPenalty float64, repeatLastN int, systemPrompt, templateName, sessionID string) (result string, nGen, nPrompt int, prefillMs, decodeMs float64) {
+// for different (or empty) session IDs. ctx cancels generation between decode
+// steps; pass context.Background() for no cancellation.
+func runGenerate(ctx context.Context, shared *InferenceModelF32, modelPath, prompt string, maxTokens int, strategy string, temperature float64, topK int, topP, repeatPenalty float64, repeatLastN int, systemPrompt, templateName, sessionID string) (result string, nGen, nPrompt int, prefillMs, decodeMs float64) {
 	if sessionID == "" {
 		m := shared.clone()
+		m.ctx = ctx
 		result, nGen, nPrompt, _ = m.Generate(prompt, maxTokens, strategy, temperature, topK, topP, repeatPenalty, repeatLastN, systemPrompt, templateName, 0)
 		return result, nGen, nPrompt, m.PrefillMs, m.DecodeMs
 	}
 	entry := globalModelCacheF32.getOrCreateSession(modelPath, sessionID, shared)
 	entry.mu.Lock()
 	defer entry.mu.Unlock()
+	entry.model.ctx = ctx
+	defer func() { entry.model.ctx = nil }()
 	var finalPos int
 	result, nGen, nPrompt, finalPos = entry.model.Generate(prompt, maxTokens, strategy, temperature, topK, topP, repeatPenalty, repeatLastN, systemPrompt, templateName, entry.pos)
 	entry.pos = finalPos
@@ -496,6 +501,10 @@ func (m *InferenceModelF32) outputLogits(xData []float32, seqLen, dModel int) []
 func (m *InferenceModelF32) Generate(prompt string, maxTokens int, strategy string, temperature float64, topK int, topP float64, repeatPenalty float64, repeatLastN int, systemPrompt string, templateName string, kvStartPos int) (string, int, int, int) {
 	enterInference()
 	defer exitInference()
+	ctx := m.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	tGenStart := time.Now()
 	if kvStartPos == 0 {
 		if templateName != "" {
@@ -521,6 +530,11 @@ func (m *InferenceModelF32) Generate(prompt string, maxTokens int, strategy stri
 
 	if kvStartPos == 0 {
 		m.initKVCaches()
+	}
+
+	// Cancelled before any work: leave the KV cache untouched.
+	if ctx.Err() != nil {
+		return "", 0, nPrompt, kvStartPos
 	}
 
 	context := tokenIDs
@@ -567,6 +581,9 @@ func (m *InferenceModelF32) Generate(prompt string, maxTokens int, strategy stri
 
 	nGen := 1
 	for step := 1; step < maxTokens; step++ {
+		if ctx.Err() != nil {
+			break
+		}
 		pos := kvStartPos + nPrompt + step - 1
 
 		logitsF32 = m.Forward([]int{nextID}, pos)
