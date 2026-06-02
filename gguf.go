@@ -10,6 +10,12 @@ import (
 
 const ggufMagic = 0x46554747
 
+// kquantPacked enables the native packed Q4_K/Q5_K/Q6_K kernels instead of
+// dequantizing to dense float32. Opt-in (SLLM_KQUANT_PACKED) until the packed
+// SIMD kernels make it the faster default; today it trades speed for ~4-6x less
+// memory, which is what lets large k-quant models fit on RAM-limited hosts.
+var kquantPacked = os.Getenv("SLLM_KQUANT_PACKED") != ""
+
 var ggufTypeSizes = map[int]int{
 	0: 4,
 	1: 2,
@@ -859,13 +865,35 @@ func (g *GGUFModel) loadWeightF32Direct(name string) (interface{}, error) {
 		raw := make([]byte, totalBytes)
 		copy(raw, fileData[offset:offset+totalBytes])
 		return &QuantWeight{QType: "q5", Raw: raw, Groups: groupsPerRow, Rows: rows, Cols: cols}, nil
-	case 7, 10, 11, 12, 13, 14:
-		// K-quants (and the legacy Q5_1 fallback) have no dedicated packed kernel
-		// here, so dequantize them to dense float32 and use the exact float
-		// matmul. Requantizing to Q8_0 would save memory and use the fast integer
-		// path, but measurably degrades accuracy at scale (the int8-activation
-		// kernel compounds the double-quantization), so correctness wins here;
-		// packed k-quant kernels are future work.
+	case 12, 13, 14:
+		// Q4_K/Q5_K/Q6_K: keep the super-blocks packed and dequantize-and-dot on
+		// the fly (kquant_kernels.go). ~4-6x fewer bytes/token than dense float
+		// and full per-element precision (no Q8 requant). Needs cols a multiple of
+		// the 256-element super-block (always true for k-quant tensors).
+		//
+		// Opt-in for now: the scalar kernel cuts memory ~4-6x (lets large k-quant
+		// models fit on RAM-limited hosts) but is slower than the SIMD float matmul
+		// until the packed SIMD kernels land, so dense float stays the default.
+		if kquantPacked && cols%256 == 0 {
+			var qt string
+			var blockBytes int
+			switch ti.Type {
+			case 12:
+				qt, blockBytes = "q4k", q4kBlockBytes
+			case 13:
+				qt, blockBytes = "q5k", q5kBlockBytes
+			case 14:
+				qt, blockBytes = "q6k", q6kBlockBytes
+			}
+			nSB := nElements / 256
+			totalBytes := nSB * blockBytes
+			rawW := make([]byte, totalBytes)
+			copy(rawW, fileData[offset:offset+totalBytes])
+			return &QuantWeight{QType: qt, Raw: rawW, Groups: cols / 256, Rows: rows, Cols: cols}, nil
+		}
+		fallthrough
+	case 7, 10, 11:
+		// Q5_1 fallback and Q2_K/Q3_K (no packed kernel yet): dense float32.
 		flat := g.dequantize1D(fileData, ti, nElements)
 		return f64ToF32(flat), nil
 	}
