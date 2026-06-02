@@ -18,9 +18,17 @@
 #   ./bench/fleet.sh run <host> <model> [args...]  one generation, raw output
 #   ./bench/fleet.sh bench [host|all]              standard t/s matrix table
 #   ./bench/fleet.sh profile <host> <model> [toks] CPU profile -> pprof -top
+#   ./bench/fleet.sh models                         list models MODELS=all resolves to
 #
 # <model> is a .gguf basename (copied from the local source dir and resolved
 # against the host's model_dir) or an absolute path already on the remote.
+#
+# Pick which models deploy/bench act on with MODELS. Set MODELS=all to use every
+# .gguf in the local source dir (the easy way to test all models, k-quants
+# included); otherwise it's a space-separated basename list. Examples:
+#   MODELS=all ./bench/fleet.sh bench m2max
+#   MODELS="SmolLM2-1.7B-Instruct-Q4_K_M.gguf SmolLM2-1.7B-Instruct-Q8_0.gguf" \
+#       ./bench/fleet.sh bench 9900x
 #
 # Env overrides: FLEET_CONF, FLEET_PROMPT, FLEET_TOKENS, SSH_OPTS, MODELS,
 #   FLEET_MODELS_SRC (local dir holding the .gguf files; default <repo>/models),
@@ -40,6 +48,25 @@ MODELS="${MODELS:-SmolLM2-135M-Instruct-Q8_0.gguf SmolLM2-360M-Instruct-Q8_0.ggu
 LOCAL_MODELS="${FLEET_MODELS_SRC:-$ROOT/models}"
 
 die() { echo "fleet: $*" >&2; exit 1; }
+
+# resolve_models echoes the model list to act on. MODELS=all (or "*") expands to
+# every .gguf basename in LOCAL_MODELS — the easy way to test every model,
+# including the k-quant ones — sorted for a stable table order. Otherwise the
+# explicit MODELS list (or its default) is used verbatim.
+resolve_models() {
+	case "${MODELS:-}" in
+		all|'*'|'')
+			local f found=
+			for f in "$LOCAL_MODELS"/*.gguf; do
+				[ -e "$f" ] || continue
+				found="$found $(basename "$f")"
+			done
+			[ -n "$found" ] || die "no .gguf files in $LOCAL_MODELS (set FLEET_MODELS_SRC or MODELS)"
+			printf '%s\n' $found | sort | tr '\n' ' '
+			;;
+		*) printf '%s' "$MODELS" ;;
+	esac
+}
 
 load_host() {
 	local want="$1" line
@@ -119,7 +146,7 @@ infer_cmd() { # model tokens prof [extra...]
 
 deploy() {
 	load_host "$1"; ensure_dirs; push_binary
-	local m; for m in $MODELS; do ensure_model "$m"; done
+	local m; for m in $(resolve_models); do ensure_model "$m"; done
 	echo "[$NAME] ready (bin in $RDIR, models in $MDIR)"
 }
 
@@ -135,7 +162,7 @@ bench_host() {
 	printf '== %-9s (%s/%s, %s) ==\n' "$NAME" "$GOOS" "$GOARCH" "$SSH"
 	printf '%-38s %10s %10s\n' "model" "prefill" "decode"
 	local m out pre dec
-	for m in $MODELS; do
+	for m in $(resolve_models); do
 		ensure_model "$m" || { printf '%-38s %10s\n' "$m" "NO-MODEL"; continue; }
 		if out="$(rsh "$(infer_cmd "$(resolve_model "$m")" "$TOKENS" "")" 2>&1)"; then
 			pre="$(printf '%s\n' "$out" | awk '/prefill/{print $(NF-1)" "$NF}')"
@@ -182,5 +209,6 @@ case "$cmd" in
 	run)     run_host "$@" ;;
 	bench)   t="${1:-all}"; if [ "$t" = all ]; then for h in $(all_hosts); do bench_host "$h"; done; else bench_host "$t"; fi ;;
 	profile) profile_host "$@" ;;
-	*) sed -n '2,33p' "$0"; exit 1 ;;
+	models)  resolve_models | tr ' ' '\n' | sed '/^$/d' ;;
+	*) sed -n '2,40p' "$0"; exit 1 ;;
 esac

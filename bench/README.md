@@ -36,6 +36,27 @@ collects results. Remotes need **no Go toolchain** — only the binary and the
 ./bench/fleet.sh bench 9900x               # just one host
 ./bench/fleet.sh run 9900x SmolLM2-1.7B-Instruct-Q4_0.gguf -tokens 100
 ./bench/fleet.sh profile 9900x SmolLM2-1.7B-Instruct-Q4_0.gguf 150   # CPU profile -> pprof -top
+./bench/fleet.sh models                     # list what MODELS=all would resolve to
+```
+
+### Testing every model (k-quants included)
+
+`bench`/`deploy` act on the model set in `MODELS`. Set `MODELS=all` to use **every
+`.gguf` in the local source dir** — the simplest way to test all models, including
+the k-quant variants (`Q4_K_M`, `Q5_K_M`, `Q6_K`, …):
+
+```bash
+MODELS=all ./bench/fleet.sh models           # preview the full list first
+MODELS=all ./bench/fleet.sh bench all        # bench every model on every host
+MODELS=all ./bench/fleet.sh deploy m2max     # just push every model to one host
+```
+
+Missing models are copied to each host on demand (large k-quant files are pushed
+once and reused). To bench a specific subset, pass an explicit list:
+
+```bash
+MODELS="SmolLM2-1.7B-Instruct-Q4_K_M.gguf SmolLM2-1.7B-Instruct-Q8_0.gguf" \
+    ./bench/fleet.sh bench 9900x
 ```
 
 `bench` parses the prefill/decode `t/s` lines; `profile` fetches the `.prof`
@@ -46,7 +67,7 @@ symbolization works because Go binaries carry their symbol table).
 
 | Var | Default | Purpose |
 |-----|---------|---------|
-| `MODELS` | 135M/360M/1.7B Q8 + 1.7B Q4 | space-separated basenames for `bench` |
+| `MODELS` | 135M/360M/1.7B Q8 + 1.7B Q4 | space-separated basenames, or `all` for every `.gguf` in the source dir |
 | `FLEET_MODELS_SRC` | `<repo>/models` | local dir the models are copied from |
 | `FORCE` | unset | `1` re-copies models even if already present |
 | `FLEET_TOKENS` | 120 | tokens to generate |
