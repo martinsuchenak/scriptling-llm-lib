@@ -30,7 +30,7 @@
 #   MODELS="SmolLM2-1.7B-Instruct-Q4_K_M.gguf SmolLM2-1.7B-Instruct-Q8_0.gguf" \
 #       ./bench/fleet.sh bench 9900x
 #
-# Env overrides: FLEET_CONF, FLEET_PROMPT, FLEET_TOKENS, SSH_OPTS, MODELS,
+# Env overrides: FLEET_CONF, FLEET_PROMPT, FLEET_TOKENS, FLEET_ENV, SSH_OPTS, MODELS,
 #   FLEET_MODELS_SRC (local dir holding the .gguf files; default <repo>/models),
 #   FORCE=1 (re-copy models even if present).
 set -euo pipefail
@@ -44,6 +44,10 @@ BINDIR="$HERE/bin"
 SSH_OPTS="${SSH_OPTS:--o BatchMode=yes -o ConnectTimeout=8}"
 PROMPT="${FLEET_PROMPT:-Write a long, detailed story about a dog and its adventures across the world.}"
 TOKENS="${FLEET_TOKENS:-120}"
+# FLEET_ENV: space-separated VAR=value pairs exported on the *remote* for each
+# infer run (ssh does not forward your local env). e.g.
+#   FLEET_ENV="SLLM_KQUANT_PACKED=1" ./bench/fleet.sh bench m5max
+FLEET_ENV="${FLEET_ENV:-}"
 MODELS="${MODELS:-SmolLM2-135M-Instruct-Q8_0.gguf SmolLM2-360M-Instruct-Q8_0.gguf SmolLM2-1.7B-Instruct-Q8_0.gguf SmolLM2-1.7B-Instruct-Q4_0.gguf}"
 LOCAL_MODELS="${FLEET_MODELS_SRC:-$ROOT/models}"
 
@@ -137,9 +141,15 @@ infer_cmd() { # model tokens prof [extra...]
 	if is_win; then
 		c="\"$(winpath "$bin")\" -model \"$(winpath "$model")\" -prompt $(q "$PROMPT") -tokens $toks -strategy greedy"
 		[ -n "$prof" ] && c="$c -prof \"$(winpath "$prof")\""
+		if [ -n "$FLEET_ENV" ]; then
+			local kv pfx=""
+			for kv in $FLEET_ENV; do pfx="${pfx}set \"$kv\" && "; done
+			c="$pfx$c"   # cmd.exe: set VAR=val && ... infer
+		fi
 	else
 		c="$bin -model $model -prompt $(q "$PROMPT") -tokens $toks -strategy greedy"   # paths unquoted: ~ expands
 		[ -n "$prof" ] && c="$c -prof $prof"
+		[ -n "$FLEET_ENV" ] && c="$FLEET_ENV $c"   # sh: VAR=val ... infer
 	fi
 	printf '%s %s' "$c" "$*"
 }

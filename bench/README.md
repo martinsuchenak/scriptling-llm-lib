@@ -71,13 +71,24 @@ symbolization works because Go binaries carry their symbol table).
 | `FLEET_MODELS_SRC` | `<repo>/models` | local dir the models are copied from |
 | `FORCE` | unset | `1` re-copies models even if already present |
 | `FLEET_TOKENS` | 120 | tokens to generate |
+| `FLEET_ENV` | unset | `VAR=value` pairs exported on the **remote** for each run (ssh doesn't forward your local env), e.g. `FLEET_ENV="SLLM_KQUANT_PACKED=1"` |
 | `FLEET_PROMPT` | a story prompt | prompt text |
 | `SSH_OPTS` | `-o BatchMode=yes -o ConnectTimeout=8` | extra ssh/scp options |
 | `FLEET_CONF` | `bench/hosts.conf` | alternate config |
 
-Tuning knobs still apply on the remote via the env, e.g.
-`SSH_OPTS=... FLEET_TOKENS=100 ./bench/fleet.sh run ...`, and the library's own
-`SLLM_Q8_KERNEL` / `SLLM_PARALLEL_THRESHOLD` / `GODEBUG=asyncpreemptoff=1` can be
-set by prefixing them in `FLEET_PROMPT`-style wrappers or editing the invocation.
+Library tuning knobs are passed to the remote binary with `FLEET_ENV` (ssh does
+not forward your local environment). For example, to compare the opt-in packed
+k-quant path against the dense default on a host:
+
+```bash
+# dense float k-quant (default)
+MODELS="SmolLM2-1.7B-Instruct-Q4_K_M.gguf" ./bench/fleet.sh bench m5max
+# native packed k-quant (~4-6x less memory)
+FLEET_ENV="SLLM_KQUANT_PACKED=1" \
+    MODELS="SmolLM2-1.7B-Instruct-Q4_K_M.gguf" ./bench/fleet.sh bench m5max
+```
+
+The same mechanism works for `SLLM_Q8_KERNEL`, `SLLM_PARALLEL_THRESHOLD`,
+`GODEBUG=asyncpreemptoff=1`, etc. — e.g. `FLEET_ENV="SLLM_Q8_KERNEL=float GODEBUG=asyncpreemptoff=1"`.
 
 Build artifacts land in `bench/bin/` (git-ignored).
