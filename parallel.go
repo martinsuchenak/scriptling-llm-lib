@@ -259,7 +259,11 @@ func parallelForChunked(n int, fn func(start, end int)) {
 		fn(0, n)
 		return
 	}
-	chunk := (n + nWorkers - 1) / nWorkers
+	// More chunks than workers so work-stealing balances uneven cores — Apple
+	// Silicon mixes fast P-cores and slow E-cores, and one-chunk-per-worker lets
+	// a slow E-core bottleneck the whole barrier. ~4 chunks/worker keeps the tail
+	// (one small chunk) short while the per-chunk atomic cost stays negligible.
+	chunk := (n + nWorkers*4 - 1) / (nWorkers * 4)
 	if chunk < 1 {
 		chunk = 1
 	}
