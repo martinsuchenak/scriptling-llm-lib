@@ -75,6 +75,8 @@ func GenerateWithCache(
 
 Runs inference with the global model cache. If `sessionID` is non-empty the KV cache is persisted between calls, enabling multi-turn conversations without reprocessing prior context.
 
+**Concurrency:** `GenerateWithCache` is safe to call from multiple goroutines at once. The model weights are loaded once and shared read-only; each call runs on its own clone of the mutable inference state (KV cache and scratch buffers), so concurrent requests cannot corrupt one another. Turns of the *same* `sessionID` are serialized (a session is a single conversation). A single in-flight request fans out across all cores; when several requests are in flight, each runs serially and the cores are shared between them — so throughput scales with load without oversubscribing the CPU.
+
 Return values:
 - `text` — generated text
 - `generatedTokens` — number of tokens produced

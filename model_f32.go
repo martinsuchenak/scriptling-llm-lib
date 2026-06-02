@@ -15,8 +15,9 @@ type modelCacheF32 struct {
 }
 
 type sessionEntryF32 struct {
-	kvCaches []KVCacheF32
-	kvPos    int
+	model *InferenceModelF32 // clone holding this session's KV cache + scratch
+	pos   int                // KV position (tokens seen so far)
+	mu    sync.Mutex         // serializes turns of this session
 }
 
 var globalModelCacheF32 = &modelCacheF32{
@@ -55,29 +56,27 @@ func (c *modelCacheF32) clearModels() {
 	c.sessions = make(map[string]map[string]*sessionEntryF32)
 }
 
-func (c *modelCacheF32) getSession(modelPath, sessionID string) *sessionEntryF32 {
-	sessions, ok := c.sessions[modelPath]
-	if !ok {
-		return nil
+// getOrCreateSession returns the session's persistent clone, creating it (with a
+// fresh KV cache that shares the model's weights) on first use.
+func (c *modelCacheF32) getOrCreateSession(modelPath, sessionID string, shared *InferenceModelF32) *sessionEntryF32 {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	sessions := c.sessions[modelPath]
+	if sessions == nil {
+		sessions = make(map[string]*sessionEntryF32)
+		c.sessions[modelPath] = sessions
 	}
-	return sessions[sessionID]
-}
-
-func (c *modelCacheF32) saveSession(modelPath, sessionID string, caches []KVCacheF32, kvPos int) {
-	if _, ok := c.sessions[modelPath]; !ok {
-		c.sessions[modelPath] = make(map[string]*sessionEntryF32)
+	if e := sessions[sessionID]; e != nil {
+		return e
 	}
-	if entry, ok := c.sessions[modelPath][sessionID]; ok {
-		entry.kvPos = kvPos
-	} else {
-		c.sessions[modelPath][sessionID] = &sessionEntryF32{
-			kvCaches: copyKVCachesF32(caches),
-			kvPos:    kvPos,
-		}
-	}
+	e := &sessionEntryF32{model: shared.clone()}
+	sessions[sessionID] = e
+	return e
 }
 
 func (c *modelCacheF32) clearSession(modelPath, sessionID string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	if sessions, ok := c.sessions[modelPath]; ok {
 		delete(sessions, sessionID)
 		if len(sessions) == 0 {
@@ -86,19 +85,23 @@ func (c *modelCacheF32) clearSession(modelPath, sessionID string) {
 	}
 }
 
-func copyKVCachesF32(caches []KVCacheF32) []KVCacheF32 {
-	result := make([]KVCacheF32, len(caches))
-	for i, c := range caches {
-		result[i] = KVCacheF32{
-			K: make([][]float32, len(c.K)),
-			V: make([][]float32, len(c.V)),
-		}
-		for h := range c.K {
-			result[i].K[h] = append([]float32(nil), c.K[h]...)
-			result[i].V[h] = append([]float32(nil), c.V[h]...)
-		}
+// runGenerate runs one generation against the shared (read-only) model. Without
+// a session it uses a throwaway clone; with a session it uses that session's
+// persistent clone and serializes the session's turns. Safe to call concurrently
+// for different (or empty) session IDs.
+func runGenerate(shared *InferenceModelF32, modelPath, prompt string, maxTokens int, strategy string, temperature float64, topK int, topP, repeatPenalty float64, repeatLastN int, systemPrompt, templateName, sessionID string) (result string, nGen, nPrompt int, prefillMs, decodeMs float64) {
+	if sessionID == "" {
+		m := shared.clone()
+		result, nGen, nPrompt, _ = m.Generate(prompt, maxTokens, strategy, temperature, topK, topP, repeatPenalty, repeatLastN, systemPrompt, templateName, 0)
+		return result, nGen, nPrompt, m.PrefillMs, m.DecodeMs
 	}
-	return result
+	entry := globalModelCacheF32.getOrCreateSession(modelPath, sessionID, shared)
+	entry.mu.Lock()
+	defer entry.mu.Unlock()
+	var finalPos int
+	result, nGen, nPrompt, finalPos = entry.model.Generate(prompt, maxTokens, strategy, temperature, topK, topP, repeatPenalty, repeatLastN, systemPrompt, templateName, entry.pos)
+	entry.pos = finalPos
+	return result, nGen, nPrompt, entry.model.PrefillMs, entry.model.DecodeMs
 }
 
 func buildInferenceModelF32(gguf *GGUFModel, path string) (*InferenceModelF32, error) {
@@ -307,6 +310,22 @@ func (m *InferenceModelF32) initKVCaches() {
 	b.logits = make([]float32, m.Config.VocabSize)
 }
 
+// clone returns an inference instance that shares this model's read-only weights
+// (the big tensors, tokenizer, rope tables — no copy) but has its own mutable
+// state: KV cache, scratch buffers, and timing stats. Each concurrent request
+// runs on its own clone, so requests never corrupt one another. Cheap: only the
+// per-request scratch (~hundreds of KB) is allocated, not the weights.
+func (m *InferenceModelF32) clone() *InferenceModelF32 {
+	c := *m // shallow copy shares all weight slices by reference
+	c.KVCaches = nil
+	c.bufs = blockBuffers{}
+	c.xDataBuf = nil
+	c.PrefillMs = 0
+	c.DecodeMs = 0
+	c.initKVCaches()
+	return &c
+}
+
 func (m *InferenceModelF32) Forward(tokenIDs []int, startPos int) []float32 {
 	seqLen := len(tokenIDs)
 	dModel := m.Config.DModel
@@ -475,6 +494,8 @@ func (m *InferenceModelF32) outputLogits(xData []float32, seqLen, dModel int) []
 }
 
 func (m *InferenceModelF32) Generate(prompt string, maxTokens int, strategy string, temperature float64, topK int, topP float64, repeatPenalty float64, repeatLastN int, systemPrompt string, templateName string, kvStartPos int) (string, int, int, int) {
+	enterInference()
+	defer exitInference()
 	tGenStart := time.Now()
 	if kvStartPos == 0 {
 		if templateName != "" {

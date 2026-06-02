@@ -243,8 +243,19 @@ func runChunks() {
 	}
 }
 
+// activeInferences counts concurrent top-level inferences (see enterInference).
+// The shared worker pool is single-flight, so it is used only when exactly one
+// inference is active; with several in flight, each runs serially and they
+// execute truly in parallel across separate cores. This keeps the pool free of
+// concurrent use (no corruption) while adapting between low-latency (one request
+// → all cores) and high-throughput (N requests → N cores) automatically.
+var activeInferences int32
+
+func enterInference() { atomic.AddInt32(&activeInferences, 1) }
+func exitInference()  { atomic.AddInt32(&activeInferences, -1) }
+
 func parallelFor(n int, fn func(start, end int)) {
-	if n <= parThreshold || nWorkers <= 1 {
+	if n <= parThreshold || nWorkers <= 1 || atomic.LoadInt32(&activeInferences) > 1 {
 		fn(0, n)
 		return
 	}

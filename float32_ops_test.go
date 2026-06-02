@@ -418,25 +418,6 @@ func TestFlattenF64ToF32(t *testing.T) {
 	}
 }
 
-func TestCopyKVCachesF32(t *testing.T) {
-	original := []KVCacheF32{
-		{
-			K: [][]float32{{1.0, 2.0, 3.0}},
-			V: [][]float32{{4.0, 5.0, 6.0}},
-		},
-	}
-
-	copied := copyKVCachesF32(original)
-	if len(copied) != 1 {
-		t.Fatalf("copyKVCachesF32 len = %d, want 1", len(copied))
-	}
-
-	copied[0].K[0][0] = 999.0
-	if original[0].K[0][0] == 999.0 {
-		t.Error("copyKVCachesF32 did not deep copy - modifying copy affected original")
-	}
-}
-
 func TestBufPool(t *testing.T) {
 	b1 := bp.get(100)
 	if len(b1) != 100 {
@@ -872,25 +853,26 @@ func TestSessionStoreF32(t *testing.T) {
 		sessions: make(map[string]map[string]*sessionEntryF32),
 	}
 
-	if entry := mc.getSession("model.gguf", "s1"); entry != nil {
-		t.Error("getSession on empty should return nil")
+	shared := &InferenceModelF32{
+		Config:   ModelConfig{NLayers: 1, DModel: 4, DFF: 8, VocabSize: 10, MaxSeqLen: 16},
+		nHeads:   1,
+		nKVHeads: 1,
+		dK:       4,
 	}
 
-	caches := []KVCacheF32{
-		{K: [][]float32{{1.0, 2.0}}, V: [][]float32{{3.0, 4.0}}},
+	e1 := mc.getOrCreateSession("model.gguf", "s1", shared)
+	if e1 == nil || e1.model == nil {
+		t.Fatal("getOrCreateSession should create an entry with a clone")
 	}
-	mc.saveSession("model.gguf", "s1", caches, 10)
-
-	entry := mc.getSession("model.gguf", "s1")
-	if entry == nil {
-		t.Fatal("getSession after save should return entry")
+	if e1.model == shared {
+		t.Error("session must use a clone, not the shared model")
 	}
-	if entry.kvPos != 10 {
-		t.Errorf("kvPos = %d, want 10", entry.kvPos)
+	if e2 := mc.getOrCreateSession("model.gguf", "s1", shared); e2 != e1 {
+		t.Error("getOrCreateSession should reuse the existing entry")
 	}
 
 	mc.clearSession("model.gguf", "s1")
-	if mc.getSession("model.gguf", "s1") != nil {
-		t.Error("getSession after clear should return nil")
+	if mc.sessions["model.gguf"]["s1"] != nil {
+		t.Error("session should be removed after clear")
 	}
 }

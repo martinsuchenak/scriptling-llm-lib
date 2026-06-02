@@ -321,15 +321,15 @@ func TestGenerateWithSessionIntegration(t *testing.T) {
 	}
 
 	globalModelCacheF32.mu.Lock()
-	entry := globalModelCacheF32.getSession(path, "test-session-1")
+	entry := globalModelCacheF32.sessions[path]["test-session-1"]
+	globalModelCacheF32.mu.Unlock()
 	if entry == nil {
 		t.Fatal("session not found after first generate")
 	}
-	if entry.kvPos <= 0 {
-		t.Errorf("kvPos = %d, want > 0", entry.kvPos)
+	if entry.pos <= 0 {
+		t.Errorf("pos = %d, want > 0", entry.pos)
 	}
-	savedPos := entry.kvPos
-	globalModelCacheF32.mu.Unlock()
+	savedPos := entry.pos
 
 	kwargs2 := object.NewKwargs(map[string]object.Object{
 		"session": object.NewString("test-session-1"),
@@ -351,19 +351,20 @@ func TestGenerateWithSessionIntegration(t *testing.T) {
 	}
 
 	globalModelCacheF32.mu.Lock()
-	entry2 := globalModelCacheF32.getSession(path, "test-session-1")
-	if entry2.kvPos <= savedPos {
-		t.Errorf("kvPos after second generate = %d, should be > first kvPos %d", entry2.kvPos, savedPos)
-	}
+	entry2 := globalModelCacheF32.sessions[path]["test-session-1"]
 	globalModelCacheF32.mu.Unlock()
+	if entry2.pos <= savedPos {
+		t.Errorf("pos after second generate = %d, should be > first pos %d", entry2.pos, savedPos)
+	}
 
 	fnClearSession(ctx, noopKwargs, object.NewString(path), object.NewString("test-session-1"))
 
 	globalModelCacheF32.mu.Lock()
-	if globalModelCacheF32.getSession(path, "test-session-1") != nil {
+	cleared := globalModelCacheF32.sessions[path]["test-session-1"]
+	globalModelCacheF32.mu.Unlock()
+	if cleared != nil {
 		t.Error("session should be cleared")
 	}
-	globalModelCacheF32.mu.Unlock()
 }
 
 func TestSampleLogitsEmpty(t *testing.T) {

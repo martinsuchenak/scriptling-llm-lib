@@ -945,43 +945,22 @@ func fnGenerate(ctx context.Context, kwargs object.Kwargs, args ...object.Object
 		}
 	}
 
-	model, err := globalModelCacheF32.getOrLoad(modelPath.StringValue())
+	shared, err := globalModelCacheF32.getOrLoad(modelPath.StringValue())
 	if err != nil {
 		return errors.NewError("generate: %s", err.Error())
 	}
 
-	kvStartPos := 0
-
-	if sessionID != "" {
-		globalModelCacheF32.mu.Lock()
-		entry := globalModelCacheF32.getSession(modelPath.StringValue(), sessionID)
-		if entry != nil {
-			model.KVCaches = entry.kvCaches
-			kvStartPos = entry.kvPos
-		} else {
-			model.initKVCaches()
-		}
-		globalModelCacheF32.mu.Unlock()
-	}
-
 	tGenStart := time.Now()
-	result, nGen, nPrompt, finalPos := model.Generate(
-		prompt.StringValue(), maxTokens, strategy, temperature,
-		topK, topP, repeatPenalty, repeatLastN,
-		systemPrompt, templateName, kvStartPos,
+	result, nGen, nPrompt, prefillMs, decodeMs := runGenerate(
+		shared, modelPath.StringValue(), prompt.StringValue(), maxTokens, strategy, temperature,
+		topK, topP, repeatPenalty, repeatLastN, systemPrompt, templateName, sessionID,
 	)
 	tGenEnd := time.Now()
 
-	if sessionID != "" {
-		globalModelCacheF32.mu.Lock()
-		globalModelCacheF32.saveSession(modelPath.StringValue(), sessionID, model.KVCaches, finalPos)
-		globalModelCacheF32.mu.Unlock()
-	}
-
 	if showStats {
 		totalTime := tGenEnd.Sub(tGenStart).Seconds()
-		prefillSec := model.PrefillMs / 1000.0
-		decodeSec := model.DecodeMs / 1000.0
+		prefillSec := prefillMs / 1000.0
+		decodeSec := decodeMs / 1000.0
 		tps := float64(0)
 		if decodeSec > 0 {
 			tps = float64(nGen) / decodeSec
@@ -1012,9 +991,7 @@ func fnClearSession(ctx context.Context, kwargs object.Kwargs, args ...object.Ob
 		return errors.NewTypeError("STRING", args[1].Type().String())
 	}
 
-	globalModelCacheF32.mu.Lock()
 	globalModelCacheF32.clearSession(modelPath.StringValue(), sessionID.StringValue())
-	globalModelCacheF32.mu.Unlock()
 
 	return object.NewBoolean(true)
 }
