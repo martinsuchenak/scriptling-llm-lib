@@ -41,6 +41,18 @@ func init() {
 	spareCores = runtime.NumCPU() > nWorkers
 	if spareCores {
 		spinIters = 1 << 20
+		// The pool uses at most nWorkers+1 goroutines, but Go runs GOMAXPROCS
+		// (=NumCPU) Ps. The extra idle Ps' threads churn in the work-stealing
+		// scheduler (findRunnable/usleep/lock2) — cheap on Linux, brutal on
+		// macOS, where it dominated 1.7B decode. Cap GOMAXPROCS to what the pool
+		// actually uses so those idle Ps go away. Compute is unaffected (workers
+		// are already capped at nWorkers). Respect an explicit user setting and
+		// allow opt-out; never raise GOMAXPROCS.
+		if os.Getenv("GOMAXPROCS") == "" && os.Getenv("SLLM_NO_GOMAXPROCS") == "" {
+			if want := nWorkers + 1; runtime.GOMAXPROCS(0) > want {
+				runtime.GOMAXPROCS(want)
+			}
+		}
 	}
 	resolveParThreshold()
 }
