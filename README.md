@@ -52,10 +52,10 @@ The library is a single Go package (`scriptlingllmlib`) with these logical group
 | Q5_K | 176 B | 256 | dense float | Weight matrices |
 | Q6_K | 210 B | 256 | dense float | Weight matrices |
 
-K-quant models (e.g. `Q4_K_M`, `Q5_K_M`, `Q6_K`) load and run correctly. By default their super-blocks are dequantized to dense float32 and use the exact float matmul (correct, but ~4 bytes/weight). A **native packed path** is available opt-in via `SLLM_KQUANT_PACKED=1`, which keeps the super-blocks packed (~4–6× less memory — lets large k-quant models fit on RAM-limited hosts), near-bit-exact with the dense path:
+K-quant models (e.g. `Q4_K_M`, `Q5_K_M`, `Q6_K`) load and run correctly.
 
-- **Q4_K** is re-expressed as `Q4_1` (a lossless per-32 `scale·q4 + min` mapping) and runs on the existing **fused int8 SIMD kernel** (`q41q8`, AVX2 + NEON) — fast *and* compact.
-- **Q5_K / Q6_K** currently use scalar packed kernels (memory win only; dedicated SIMD kernels are still to come), so on some hosts they are slower than the dense float path. Unsupported quantizations (the IQ-family *i-quants*, e.g. `IQ4_NL`, which some k-quant repacks use for rows whose width isn't a multiple of 256) are rejected with a clear error rather than loading silently corrupted weights. For the fastest path, prefer `_Q8_0` or `_Q4_0` variants from [bartowski's GGUF collection](https://huggingface.co/bartowski).
+- **Q4_K is fast by default.** It is re-expressed as `Q4_1` (a lossless per-32 `scale·q4 + min` mapping) and runs on the existing **fused int8 SIMD kernel** (`q41q8`, AVX2 + NEON) — ~6× less memory than dense float and **~3× faster decode** (e.g. 1.7B `Q4_K_M` on an M5 Max: 10.7 → 32 t/s). This kicks in automatically wherever the fast int8 kernel is available; on hosts without it (no AVX2/NEON) Q4_K falls back to dense float32.
+- **Q5_K / Q6_K** default to dense float32 (correct, ~4 B/weight). A scalar packed path (~4–6× less memory, but slower) is available opt-in via `SLLM_KQUANT_PACKED=1` for fitting large models on RAM-limited hosts; dedicated SIMD kernels for these two are still to come. Unsupported quantizations (the IQ-family *i-quants*, e.g. `IQ4_NL`, which some k-quant repacks use for rows whose width isn't a multiple of 256) are rejected with a clear error rather than loading silently corrupted weights. For the fastest path, prefer `_Q8_0` or `_Q4_0` variants from [bartowski's GGUF collection](https://huggingface.co/bartowski).
 
 ## Go API
 

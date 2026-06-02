@@ -866,22 +866,18 @@ func (g *GGUFModel) loadWeightF32Direct(name string) (interface{}, error) {
 		copy(raw, fileData[offset:offset+totalBytes])
 		return &QuantWeight{QType: "q5", Raw: raw, Groups: groupsPerRow, Rows: rows, Cols: cols}, nil
 	case 12, 13, 14:
-		// Q4_K/Q5_K/Q6_K: keep the super-blocks packed and dequantize-and-dot on
-		// the fly (kquant_kernels.go). ~4-6x fewer bytes/token than dense float
-		// and full per-element precision (no Q8 requant). Needs cols a multiple of
-		// the 256-element super-block (always true for k-quant tensors).
-		//
-		// Opt-in for now: the scalar kernel cuts memory ~4-6x (lets large k-quant
-		// models fit on RAM-limited hosts) but is slower than the SIMD float matmul
-		// until the packed SIMD kernels land, so dense float stays the default.
+		// Q4_K maps losslessly onto Q4_1 (both per-32 scale*q4+min), so convert and
+		// reuse the fused q41q8 SIMD kernel. Default ON wherever that fast kernel is
+		// available (AVX2/NEON) — it's faster, near-lossless, and ~6x less memory
+		// than dense float (3x decode on an M5 Max). Also honoured under
+		// SLLM_KQUANT_PACKED on hosts without the fast kernel (memory win, scalar
+		// q4_1 dot). Elsewhere Q4_K falls through to dense float.
+		if ti.Type == 12 && cols%256 == 0 && (useInt8Q41 || kquantPacked) {
+			raw := convertQ4KToQ41(fileData, offset, rows, cols)
+			return &QuantWeight{QType: "q4_1", Raw: raw, Groups: cols / 32, Rows: rows, Cols: cols}, nil
+		}
 		if kquantPacked && cols%256 == 0 {
-			// Q4_K maps losslessly onto Q4_1 (both per-32 scale*q4+min), so convert
-			// and reuse the fast fused q41q8 SIMD kernel. Q5_K/Q6_K have no fast
-			// kernel yet, so they use the scalar packed path (memory win only).
-			if ti.Type == 12 {
-				raw := convertQ4KToQ41(fileData, offset, rows, cols)
-				return &QuantWeight{QType: "q4_1", Raw: raw, Groups: cols / 32, Rows: rows, Cols: cols}, nil
-			}
+			// Q5_K/Q6_K have no fast kernel yet — scalar packed path (memory only).
 			qt, blockBytes := "q5k", q5kBlockBytes
 			if ti.Type == 14 {
 				qt, blockBytes = "q6k", q6kBlockBytes
