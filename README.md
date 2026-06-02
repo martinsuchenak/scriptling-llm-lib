@@ -332,6 +332,8 @@ task test              # unit tests
 task smoke             # end-to-end generation against all downloaded models
 ```
 
+Accuracy is guarded by perplexity regression tests (`accuracy_test.go`): they compute the model's perplexity over a fixed passage and assert it stays within a golden band, and that the Q8 model is no less accurate than Q4. These catch silent corruption from changes to the hand-tuned quantized kernels. They run as part of `task test` when the SmolLM2-135M models are present, and skip otherwise.
+
 See [BENCHMARKS.md](BENCHMARKS.md) for measured decode/prefill throughput across platforms, and [bench/](bench/README.md) for `fleet.sh` — a harness that cross-compiles `infer`, pushes it plus the selected models to a fleet of remote hosts, and collects benchmarks/CPU profiles in one command.
 
 ## Performance tuning
