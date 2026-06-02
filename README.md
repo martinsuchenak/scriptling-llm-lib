@@ -305,7 +305,9 @@ Models are saved to `models/`. Remove them with `task models:clean`.
 ```bash
 task build:examples          # native platform
 task build:examples:linux    # linux/amd64 + linux/arm64
+task build:examples:darwin   # darwin/amd64 + darwin/arm64
 task build:examples:windows  # windows/amd64 + windows/arm64
+task build:dist              # all of the above
 ```
 
 Binaries land in `bin/`.
