@@ -351,12 +351,16 @@ func (m *InferenceModelF32) clone() *InferenceModelF32 {
 	return &c
 }
 
-func (m *InferenceModelF32) Forward(tokenIDs []int, startPos int) []float32 {
-	seqLen := len(tokenIDs)
-	dModel := m.Config.DModel
+// runBlocks embeds the tokens and runs them through every transformer block,
+// returning the per-position hidden states (seqLen*dModel) prior to the output
+// projection. Shared by Forward (which projects to logits) and the embedding path
+// (which pools the hidden states).
+func (m *InferenceModelF32) runBlocks(tokenIDs []int, startPos int) (xData []float32, seqLen, dModel int) {
+	seqLen = len(tokenIDs)
+	dModel = m.Config.DModel
 
 	m.xDataBuf = growSlice(m.xDataBuf, seqLen*dModel)
-	xData := m.xDataBuf[:seqLen*dModel]
+	xData = m.xDataBuf[:seqLen*dModel]
 	for i, tid := range tokenIDs {
 		if tid < m.EmbRows {
 			copy(xData[i*dModel:], m.TokenEmb[tid*m.EmbCols:tid*m.EmbCols+dModel])
@@ -366,9 +370,12 @@ func (m *InferenceModelF32) Forward(tokenIDs []int, startPos int) []float32 {
 	for i := 0; i < m.Config.NLayers; i++ {
 		xData = m.forwardBlock(i, xData, seqLen, dModel, startPos)
 	}
+	return xData, seqLen, dModel
+}
 
-	logits := m.outputLogits(xData, seqLen, dModel)
-	return logits
+func (m *InferenceModelF32) Forward(tokenIDs []int, startPos int) []float32 {
+	xData, seqLen, dModel := m.runBlocks(tokenIDs, startPos)
+	return m.outputLogits(xData, seqLen, dModel)
 }
 
 func (m *InferenceModelF32) forwardBlock(blockIdx int, xData []float32, seqLen, dModel, startPos int) []float32 {

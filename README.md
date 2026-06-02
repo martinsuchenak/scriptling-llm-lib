@@ -181,6 +181,26 @@ func ClearSessionWithCache(modelPath string, sessionID string)
 
 Evicts the KV cache for the given `(modelPath, sessionID)` pair. Call this when a conversation is finished to free memory.
 
+### `Embed`
+
+```go
+func Embed(opts EmbedOptions) ([]float32, error)
+
+type EmbedOptions struct {
+    Model, Text string // required
+    Pooling     string // PoolingMean (default) | PoolingLast
+    Normalize   bool   // L2-normalize the result (recommended for cosine similarity)
+}
+```
+
+Computes a dense embedding of `Text` from the model's final hidden states (pooled across tokens), returning a `DModel`-length vector. Uses the same concurrency-safe cache as `Generate` and runs on a private clone, so it is safe to call concurrently. Pass `Normalize: true` for unit-length vectors suited to cosine similarity.
+
+```go
+a, _ := scriptlingllmlib.Embed(scriptlingllmlib.EmbedOptions{Model: "model.gguf", Text: "the cat sat on the mat", Normalize: true})
+b, _ := scriptlingllmlib.Embed(scriptlingllmlib.EmbedOptions{Model: "model.gguf", Text: "a cat was sitting on the rug", Normalize: true})
+// cosine(a, b) is high for paraphrases, low for unrelated text.
+```
+
 ### Example
 
 ```go
@@ -207,6 +227,7 @@ All functions below are available via `import llm` in Scriptling scripts.
 ### Text Generation
 
 - `llm.generate(model, prompt, max_tokens, strategy, ...)` — End-to-end generation from GGUF files. Supports `temperature`, `top_k`, `top_p`, `repeat_penalty`, `system_prompt`, `template`, `stats`, `session` kwargs.
+- `llm.embed(model, text, pooling="mean", normalize=false)` — Dense embedding vector (list of floats) from the model's final hidden states.
 - `llm.clear_session(model, session_id)` — Clear a cached session's KV cache.
 
 ### Linear Algebra

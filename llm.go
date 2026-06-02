@@ -1,6 +1,6 @@
 // Package scriptlingllmlib provides LLM inference primitives as a Scriptling library.
 //
-// This library exposes 24 native functions under the "llm" namespace, covering
+// This library exposes 25 native functions under the "llm" namespace, covering
 // the core operations needed to implement transformer model inference in Scriptling
 // scripts. All functions are implemented using the Scriptling Native API for
 // zero-reflection overhead on every call.
@@ -470,6 +470,21 @@ Keyword args: temperature, top_k, top_p, repeat_penalty, repeat_last_n,
 
 Returns:
   Generated text string.`,
+		},
+		"embed": {
+			Fn: fnEmbed,
+			HelpText: `embed(model_path, text) - Compute a dense embedding vector for text
+
+Parameters:
+  model_path - path to .gguf model file
+  text       - text to embed
+
+Keyword args:
+  pooling   - "mean" (default) or "last"
+  normalize - L2-normalize the vector (default false)
+
+Returns:
+  List of floats (length = model embedding dimension).`,
 		},
 	},
 	map[string]object.Object{

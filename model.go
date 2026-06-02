@@ -995,3 +995,49 @@ func fnClearSession(ctx context.Context, kwargs object.Kwargs, args ...object.Ob
 
 	return object.NewBoolean(true)
 }
+
+func fnEmbed(ctx context.Context, kwargs object.Kwargs, args ...object.Object) object.Object {
+	if err := errors.ExactArgs(args, 2); err != nil {
+		return err
+	}
+
+	modelPath, ok := args[0].(*object.String)
+	if !ok {
+		return errors.NewTypeError("STRING", args[0].Type().String())
+	}
+
+	text, ok := args[1].(*object.String)
+	if !ok {
+		return errors.NewTypeError("STRING", args[1].Type().String())
+	}
+
+	pooling := PoolingMean
+	if kwargs.Has("pooling") {
+		if p, ok := kwargs.Get("pooling").(*object.String); ok {
+			pooling = p.StringValue()
+		}
+	}
+
+	normalize := false
+	if kwargs.Has("normalize") {
+		if b, ok := kwargs.Get("normalize").(*object.Boolean); ok {
+			normalize = b.BoolValue()
+		}
+	}
+
+	vec, err := Embed(EmbedOptions{
+		Model:     modelPath.StringValue(),
+		Text:      text.StringValue(),
+		Pooling:   pooling,
+		Normalize: normalize,
+	})
+	if err != nil {
+		return errors.NewError("embed: %s", err.Error())
+	}
+
+	out := make([]float64, len(vec))
+	for i, v := range vec {
+		out[i] = float64(v)
+	}
+	return object.NewFloatArray1D(out)
+}
