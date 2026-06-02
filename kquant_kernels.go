@@ -21,6 +21,47 @@ const (
 	q6kBlockBytes = 210
 )
 
+// convertQ4KToQ41 re-expresses Q4_K weights as Q4_1, which is bit-identical at
+// the sub-block level (Q4_K sub-block j: w = d*sc_j*q4 - dmin*m_j; Q4_1 block:
+// w = q4*scale + min, so scale=d*sc_j, min=-dmin*m_j, same 4-bit q4). The payoff
+// is reusing the existing fused q41q8 int8 SIMD kernel — fast and ~lossless,
+// versus a bespoke Q4_K kernel. Output is laid out exactly like a native Q4_1
+// tensor: rows of (cols/32) 20-byte blocks in output order.
+func convertQ4KToQ41(src []byte, srcOff, rows, cols int) []byte {
+	nSB := cols / 256 // Q4_K super-blocks per row
+	out := make([]byte, rows*(cols/32)*20)
+	oi := 0
+	for r := 0; r < rows; r++ {
+		rowOff := srcOff + r*nSB*q4kBlockBytes
+		for sb := 0; sb < nSB; sb++ {
+			off := rowOff + sb*q4kBlockBytes
+			d := float16ToFloat64(binary.LittleEndian.Uint16(src[off:]))
+			dmin := float16ToFloat64(binary.LittleEndian.Uint16(src[off+2:]))
+			scales := src[off+4 : off+16]
+			qs := src[off+16:] // 128 bytes for this super-block
+			for jj := 0; jj < 8; jj++ {
+				sc, m := getScaleMinK4(jj, scales)
+				binary.LittleEndian.PutUint16(out[oi:], float64ToFloat16(d*float64(sc)))
+				binary.LittleEndian.PutUint16(out[oi+2:], float64ToFloat16(-dmin*float64(m)))
+				k := (jj / 2) * 32
+				// Pack the sub-block's 32 nibbles into Q4_1 order: byte i holds
+				// element i (low) and element i+16 (high).
+				if jj&1 == 0 {
+					for i := 0; i < 16; i++ {
+						out[oi+4+i] = (qs[k+i] & 0x0F) | ((qs[k+i+16] & 0x0F) << 4)
+					}
+				} else {
+					for i := 0; i < 16; i++ {
+						out[oi+4+i] = (qs[k+i] >> 4) | ((qs[k+i+16] >> 4) << 4)
+					}
+				}
+				oi += 20
+			}
+		}
+	}
+	return out
+}
+
 // q4kDotRowF32 returns the dot product of one Q4_K weight row (nSB super-blocks
 // at raw[rOff:]) with x[xOff:xOff+nSB*256].
 func q4kDotRowF32(raw []byte, rOff int, x []float32, xOff, nSB int) float32 {

@@ -875,14 +875,15 @@ func (g *GGUFModel) loadWeightF32Direct(name string) (interface{}, error) {
 		// models fit on RAM-limited hosts) but is slower than the SIMD float matmul
 		// until the packed SIMD kernels land, so dense float stays the default.
 		if kquantPacked && cols%256 == 0 {
-			var qt string
-			var blockBytes int
-			switch ti.Type {
-			case 12:
-				qt, blockBytes = "q4k", q4kBlockBytes
-			case 13:
-				qt, blockBytes = "q5k", q5kBlockBytes
-			case 14:
+			// Q4_K maps losslessly onto Q4_1 (both per-32 scale*q4+min), so convert
+			// and reuse the fast fused q41q8 SIMD kernel. Q5_K/Q6_K have no fast
+			// kernel yet, so they use the scalar packed path (memory win only).
+			if ti.Type == 12 {
+				raw := convertQ4KToQ41(fileData, offset, rows, cols)
+				return &QuantWeight{QType: "q4_1", Raw: raw, Groups: cols / 32, Rows: rows, Cols: cols}, nil
+			}
+			qt, blockBytes := "q5k", q5kBlockBytes
+			if ti.Type == 14 {
 				qt, blockBytes = "q6k", q6kBlockBytes
 			}
 			nSB := nElements / 256
