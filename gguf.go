@@ -73,13 +73,29 @@ type QuantWeight struct {
 type ggufReader struct {
 	data []byte
 	pos  int
+	bad  bool // set once any read runs past the end of data
 }
 
 func newGGUFReader(data []byte) *ggufReader {
 	return &ggufReader{data: data}
 }
 
+// ensure reports whether n more bytes are available at the cursor. Once a read
+// has gone out of bounds the reader is "bad" and every subsequent read is a
+// no-op returning a zero value, so callers can parse optimistically and check
+// r.bad once at the end instead of after every read.
+func (r *ggufReader) ensure(n int) bool {
+	if r.bad || n < 0 || r.pos+n > len(r.data) {
+		r.bad = true
+		return false
+	}
+	return true
+}
+
 func (r *ggufReader) readUint8() uint8 {
+	if !r.ensure(1) {
+		return 0
+	}
 	v := r.data[r.pos]
 	r.pos++
 	return v
@@ -90,6 +106,9 @@ func (r *ggufReader) readInt8() int8 {
 }
 
 func (r *ggufReader) readUint16() uint16 {
+	if !r.ensure(2) {
+		return 0
+	}
 	v := binary.LittleEndian.Uint16(r.data[r.pos:])
 	r.pos += 2
 	return v
@@ -100,6 +119,9 @@ func (r *ggufReader) readInt16() int16 {
 }
 
 func (r *ggufReader) readUint32() uint32 {
+	if !r.ensure(4) {
+		return 0
+	}
 	v := binary.LittleEndian.Uint32(r.data[r.pos:])
 	r.pos += 4
 	return v
@@ -110,6 +132,9 @@ func (r *ggufReader) readInt32() int32 {
 }
 
 func (r *ggufReader) readUint64() uint64 {
+	if !r.ensure(8) {
+		return 0
+	}
 	v := binary.LittleEndian.Uint64(r.data[r.pos:])
 	r.pos += 8
 	return v
@@ -120,12 +145,18 @@ func (r *ggufReader) readInt64() int64 {
 }
 
 func (r *ggufReader) readFloat32() float32 {
+	if !r.ensure(4) {
+		return 0
+	}
 	v := binary.LittleEndian.Uint32(r.data[r.pos:])
 	r.pos += 4
 	return math.Float32frombits(v)
 }
 
 func (r *ggufReader) readFloat64() float64 {
+	if !r.ensure(8) {
+		return 0
+	}
 	v := binary.LittleEndian.Uint64(r.data[r.pos:])
 	r.pos += 8
 	return math.Float64frombits(v)
@@ -133,11 +164,21 @@ func (r *ggufReader) readFloat64() float64 {
 
 func (r *ggufReader) readString() string {
 	length := r.readUint64()
-	if length == 0 {
+	if r.bad || length == 0 {
 		return ""
 	}
-	s := string(r.data[r.pos : r.pos+int(length)])
-	r.pos += int(length)
+	// A string can be no longer than the whole file; this also guards the
+	// uint64->int conversion against overflow on a hostile length.
+	if length > uint64(len(r.data)) {
+		r.bad = true
+		return ""
+	}
+	n := int(length)
+	if !r.ensure(n) {
+		return ""
+	}
+	s := string(r.data[r.pos : r.pos+n])
+	r.pos += n
 	return s
 }
 
@@ -170,12 +211,34 @@ func (r *ggufReader) readValue(vtype uint32) interface{} {
 	case 9:
 		arrType := r.readUint32()
 		arrLen := r.readUint64()
-		result := make([]interface{}, arrLen)
+		if r.bad {
+			return nil
+		}
+		// Each element is at least one byte, so an array can't have more
+		// elements than the file has bytes. Cap the prealloc so a hostile
+		// length can't force a giant up-front allocation; the slice still
+		// grows to fit a genuine (bounded) array via append.
+		if arrLen > uint64(len(r.data)) {
+			r.bad = true
+			return nil
+		}
+		capHint := arrLen
+		if capHint > 4096 {
+			capHint = 4096
+		}
+		result := make([]interface{}, 0, capHint)
 		for i := uint64(0); i < arrLen; i++ {
-			result[i] = r.readValue(arrType)
+			v := r.readValue(arrType)
+			if r.bad {
+				return nil
+			}
+			result = append(result, v)
 		}
 		return result
 	default:
+		// Unknown value type: we can't know its width, so fail rather than
+		// desync the cursor.
+		r.bad = true
 		return nil
 	}
 }
@@ -423,7 +486,14 @@ func LoadGGUF(path string) (*GGUFModel, error) {
 	if err != nil {
 		return nil, fmt.Errorf("gguf: failed to read file: %w", err)
 	}
+	return parseGGUF(fileData)
+}
 
+// parseGGUF parses an in-memory GGUF image. It treats the bytes as untrusted:
+// every read is bounds-checked and every attacker-controlled count/length is
+// capped against the image size, so malformed input yields an error, never a
+// panic or unbounded allocation.
+func parseGGUF(fileData []byte) (*GGUFModel, error) {
 	r := newGGUFReader(fileData)
 
 	magic := r.readUint32()
@@ -435,31 +505,47 @@ func LoadGGUF(path string) (*GGUFModel, error) {
 	nTensors := r.readUint64()
 	nMetadata := r.readUint64()
 
-	metadata := make(map[string]interface{}, nMetadata)
+	// Each metadata entry and tensor descriptor occupies several bytes, so the
+	// file can't contain more of them than it has bytes. This caps the counts
+	// (which are attacker-controlled) before they drive any allocation.
+	if r.bad || nTensors > uint64(len(fileData)) || nMetadata > uint64(len(fileData)) {
+		return nil, fmt.Errorf("gguf: malformed header (tensors=%d, metadata=%d)", nTensors, nMetadata)
+	}
+
+	metadata := make(map[string]interface{}, 0)
 	for i := uint64(0); i < nMetadata; i++ {
 		key := r.readString()
 		vtype := r.readUint32()
 		val := r.readValue(vtype)
+		if r.bad {
+			return nil, fmt.Errorf("gguf: truncated or malformed metadata")
+		}
 		metadata[key] = val
 	}
 
-	tensorInfos := make([]*tensorInfo, nTensors)
+	tensorInfos := make([]*tensorInfo, 0, nTensors)
 	for i := uint64(0); i < nTensors; i++ {
 		name := r.readString()
 		nDims := r.readUint32()
+		if r.bad || uint64(nDims) > uint64(len(fileData)) {
+			return nil, fmt.Errorf("gguf: truncated or malformed tensor info")
+		}
 		dims := make([]uint64, nDims)
 		for d := uint32(0); d < nDims; d++ {
 			dims[d] = r.readUint64()
 		}
 		ggufType := r.readUint32()
 		tOffset := r.readUint64()
+		if r.bad {
+			return nil, fmt.Errorf("gguf: truncated or malformed tensor info")
+		}
 		mapped := mapTensorName(name)
-		tensorInfos[i] = &tensorInfo{
+		tensorInfos = append(tensorInfos, &tensorInfo{
 			Name:   mapped,
 			Dims:   dims,
 			Type:   ggufType,
 			Offset: tOffset,
-		}
+		})
 	}
 
 	alignment := uint64(metaInt(metadata, "general.alignment", 32))
