@@ -31,6 +31,16 @@ func init() {
 	if nWorkers > 8 {
 		nWorkers = 8
 	}
+	// Idle workers spin before parking. Decode fires many parallel rounds per
+	// token separated by serial gaps (rms-norm, attention); spinning across
+	// those gaps avoids the thread park/wake cost, which is very expensive on
+	// macOS. Spin long ONLY when there are spare cores (NumCPU > workers, e.g.
+	// the 14-core Max chips) so the idle spin never contends with the main
+	// goroutine; otherwise park quickly. This is set before calibration so the
+	// threshold measurement sees the real park/spin behavior.
+	if runtime.NumCPU() > nWorkers {
+		spinIters = 1 << 20
+	}
 	resolveParThreshold()
 }
 
@@ -75,19 +85,26 @@ func calibrateParThreshold() int {
 		}
 	}
 
+	// Each round is a serial "gap" (rowFn(0,probeN), ~a real inter-matmul gap of
+	// a few hundred µs) followed by the matmul under test. The gap makes idle
+	// workers park-or-keep-spinning exactly as they do between a token's matmuls,
+	// so the parallel timing includes the host's real wake cost (cheap on Linux
+	// futex / a hot spin pool, expensive on a constrained VM that parks). Tight
+	// warm loops hid this and mis-picked the threshold.
 	measure := func(parallel bool) time.Duration {
 		run := func() {
+			rowFn(0, probeN) // serial gap
 			if parallel {
 				parallelForChunked(probeN, rowFn)
 			} else {
 				rowFn(0, probeN)
 			}
 		}
-		run() // warm
+		run()
 		best := time.Duration(1<<62 - 1)
-		for t := 0; t < 7; t++ {
+		for t := 0; t < 5; t++ {
 			start := time.Now()
-			for r := 0; r < 16; r++ {
+			for r := 0; r < 20; r++ {
 				run()
 			}
 			if d := time.Since(start); d < best {
@@ -100,7 +117,8 @@ func calibrateParThreshold() int {
 	serial := measure(false)
 	parallel := measure(true)
 
-	// Only parallelize aggressively if splitting clearly helps (>10% faster).
+	// Parallelize aggressively only if splitting clearly helps under the realistic
+	// gap (>10% faster); otherwise keep small matmuls serial.
 	if parallel < serial*9/10 {
 		return 256
 	}
@@ -129,9 +147,8 @@ var wpool workerPool
 var wpoolOnce sync.Once
 
 // spinIters is how long an idle worker spins (checking the generation counter)
-// before parking. ~tens of microseconds — long enough to bridge the serial gaps
-// between a token's matmuls, short enough not to burn cores between requests.
-const spinIters = 30000
+// before parking. Raised at init on aggressively-parallel hosts (see init).
+var spinIters = 4000
 
 func initWorkers() {
 	if nWorkers <= 1 {
@@ -224,8 +241,12 @@ func parallelForChunked(n int, fn func(start, end int)) {
 
 	runChunks() // the caller is a worker too
 
-	// Wait for stragglers (workers finishing their last chunk).
-	for atomic.LoadInt64(&wpool.remaining) > 0 {
-		runtime.Gosched()
+	// Wait for stragglers. Busy-spin (cheap, balanced chunks finish together),
+	// yielding only periodically so an oversubscribed host (workers ≥ cores) can
+	// still schedule a descheduled worker without a hard spin-stall.
+	for spins := 0; atomic.LoadInt64(&wpool.remaining) > 0; spins++ {
+		if spins&1023 == 1023 {
+			runtime.Gosched()
+		}
 	}
 }
