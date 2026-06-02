@@ -257,17 +257,6 @@ func shouldUseInt8Q8() bool {
 	xq := make([]int8, groups*32)
 	xs := make([]float32, groups)
 	quantizeActivationsQ8(x, groups, xq, xs)
-	// Pre-combined scales (for the fused/VNNI kernels) and the VNNI correction.
-	cmb := make([]float32, groups)
-	corr := make([]int32, groups)
-	for g := 0; g < groups; g++ {
-		cmb[g] = f16LUT[uint16(w.Raw[g*34])|uint16(w.Raw[g*34+1])<<8] * xs[g]
-		var s int32
-		for k := 0; k < 32; k++ {
-			s += int32(xq[g*32+k])
-		}
-		corr[g] = 128 * s
-	}
 
 	bench := func(fn func()) time.Duration {
 		for i := 0; i < 200; i++ {
@@ -286,16 +275,8 @@ func shouldUseInt8Q8() bool {
 		return best
 	}
 
-	// Benchmark the actual int8 kernel q8q8MatmulInto would use, vs the float kernel.
 	int8Time := bench(func() {
-		switch {
-		case q8q8VNNIAvail:
-			kernelBenchSink += q8q8VNNIDot(&w.Raw[0], &xq[0], &cmb[0], &corr[0], groups)
-		case q8q8FusedAvail:
-			kernelBenchSink += q8q8RowFused(&w.Raw[0], &xq[0], &cmb[0], groups)
-		default:
-			kernelBenchSink += q8q8RowDot(w.Raw, 0, xq, xs, groups)
-		}
+		kernelBenchSink += q8q8RowDot(w.Raw, 0, xq, xs, groups)
 	})
 	floatTime := bench(func() {
 		kernelBenchSink += q8DotRowsAsm(&w.Raw[0], &x[0], groups)
