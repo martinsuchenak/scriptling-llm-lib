@@ -22,7 +22,7 @@ GLOBL q41ones<>(SB), RODATA|NOPTR, $32
 // Σ(nibble·xq) uses VPMADDUBSW on the unsigned nibbles (0..15); Σxq is passed in
 // via sumXqPtr (per group, activation-only). d and m are decoded in-kernel with
 // VCVTPH2PS. All ops VEX-encoded.
-TEXT ·q41q8RowDotAVX2(SB), NOSPLIT, $0-48
+TEXT ·q41q8RowDotAVX2(SB), NOSPLIT, $0-44
 	MOVQ wPtr+0(FP), SI
 	MOVQ xqPtr+8(FP), DI
 	MOVQ xScalePtr+16(FP), DX

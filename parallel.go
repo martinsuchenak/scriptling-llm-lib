@@ -40,7 +40,7 @@ func init() {
 	// threshold measurement sees the real park/spin behavior.
 	spareCores = runtime.NumCPU() > nWorkers
 	if spareCores {
-		spinIters = 1 << 20
+		parkAfter = 50 * time.Millisecond
 		// The pool uses at most nWorkers+1 goroutines, but Go runs GOMAXPROCS
 		// (=NumCPU) Ps. The extra idle Ps' threads churn in the work-stealing
 		// scheduler (findRunnable/usleep/lock2) — cheap on Linux, brutal on
@@ -165,9 +165,11 @@ type workerPool struct {
 var wpool workerPool
 var wpoolOnce sync.Once
 
-// spinIters is how long an idle worker spins (checking the generation counter)
-// before parking. Raised at init on aggressively-parallel hosts (see init).
-var spinIters = 4000
+// parkAfter is how long an idle worker keeps spinning (checking the generation
+// counter) before parking on the cond. Set in init: long on spare-core hosts so
+// workers stay hot across a token's serial gaps (attention/rms-norm) and never
+// pay the macOS thread park/wake cost during a generation; short elsewhere.
+var parkAfter = 50 * time.Microsecond
 
 func initWorkers() {
 	if nWorkers <= 1 {
@@ -182,12 +184,21 @@ func initWorkers() {
 func workerLoop() {
 	lastGen := atomic.LoadUint64(&wpool.gen)
 	for {
-		// Wait for the next batch: spin on the generation counter, then park.
 		if atomic.LoadUint64(&wpool.gen) == lastGen {
-			parked := true
-			for s := 0; s < spinIters; s++ {
-				if atomic.LoadUint64(&wpool.gen) != lastGen {
-					parked = false
+			// Spin for the next batch, parking only after parkAfter of idleness.
+			// The inner loop checks the generation cheaply; the time check (and
+			// thus park decision) happens only every ~few microseconds.
+			idleStart := time.Now()
+			parked := false
+		spin:
+			for atomic.LoadUint64(&wpool.gen) == lastGen {
+				for i := 0; i < 2048; i++ {
+					if atomic.LoadUint64(&wpool.gen) != lastGen {
+						break spin
+					}
+				}
+				if time.Since(idleStart) >= parkAfter {
+					parked = true
 					break
 				}
 			}

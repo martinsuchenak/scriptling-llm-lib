@@ -44,7 +44,7 @@ GLOBL q4ones<>(SB), RODATA|NOPTR, $32
 	ADDQ $4, DX              \
 	ADDQ $4, R8
 
-TEXT ·q4q8RowDotAVX2(SB), NOSPLIT, $0-48
+TEXT ·q4q8RowDotAVX2(SB), NOSPLIT, $0-44
 	MOVQ wPtr+0(FP), SI
 	MOVQ xqPtr+8(FP), DI
 	MOVQ xScalePtr+16(FP), DX
