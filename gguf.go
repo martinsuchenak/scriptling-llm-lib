@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"runtime"
 )
 
 const ggufMagic = 0x46554747
@@ -37,6 +38,7 @@ type GGUFModel struct {
 	File       *os.File
 	DataOffset int64
 	fileData   []byte
+	unmap      func() error // non-nil when fileData is a memory map
 }
 
 type ModelConfig struct {
@@ -482,11 +484,31 @@ func dequantizeQ5_0Native(data []byte, offset int, nElements int) []float64 {
 }
 
 func LoadGGUF(path string) (*GGUFModel, error) {
-	fileData, err := os.ReadFile(path)
+	// Prefer a read-only memory map (cheap, file-backed); fall back to a full
+	// read where mmap is unavailable (e.g. Windows) or fails.
+	fileData, unmap, err := mmapFile(path)
 	if err != nil {
-		return nil, fmt.Errorf("gguf: failed to read file: %w", err)
+		fileData, err = os.ReadFile(path)
+		if err != nil {
+			return nil, fmt.Errorf("gguf: failed to read file: %w", err)
+		}
+		unmap = nil
 	}
-	return parseGGUF(fileData)
+
+	g, perr := parseGGUF(fileData)
+	if perr != nil {
+		if unmap != nil {
+			_ = unmap()
+		}
+		return nil, perr
+	}
+
+	if unmap != nil {
+		g.unmap = unmap
+		// Safety net: unmap if the caller forgets ReleaseFileData.
+		runtime.SetFinalizer(g, (*GGUFModel).ReleaseFileData)
+	}
+	return g, nil
 }
 
 // parseGGUF parses an in-memory GGUF image. It treats the bytes as untrusted:
@@ -655,7 +677,15 @@ func parseGGUF(fileData []byte) (*GGUFModel, error) {
 	return gguf, nil
 }
 
+// ReleaseFileData frees the file image. If it was memory-mapped the mapping is
+// unmapped; otherwise the byte slice is simply dropped for the GC. Safe to call
+// more than once. After this, LoadTensor re-reads the file on demand.
 func (g *GGUFModel) ReleaseFileData() {
+	if g.unmap != nil {
+		_ = g.unmap()
+		g.unmap = nil
+		runtime.SetFinalizer(g, nil)
+	}
 	g.fileData = nil
 }
 

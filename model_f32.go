@@ -56,13 +56,14 @@ func (c *modelCacheF32) getOrLoad(path string) (*InferenceModelF32, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Release the file image (unmapping it if mapped) on every path once the
+	// weights have been copied into the model.
+	defer gguf.ReleaseFileData()
 
 	model, err := buildInferenceModelF32(gguf, path)
 	if err != nil {
 		return nil, err
 	}
-
-	gguf.ReleaseFileData()
 
 	c.models[path] = model
 	return model, nil

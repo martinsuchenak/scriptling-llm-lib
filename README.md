@@ -390,6 +390,8 @@ SLLM_PARALLEL_THRESHOLD=999999999 ./bin/infer -model model.gguf -prompt "..."
 
 Worker count follows `runtime.NumCPU()`, capped at 8.
 
+**Memory-mapped loading.** On Linux and macOS the model file is loaded with a read-only `mmap` instead of being read fully into the heap. The weights are still copied into the model's own buffers during build, but the file image itself is file-backed (clean, reclaimable, shareable across processes) rather than a dirty heap allocation — roughly halving peak resident memory during load and avoiding a full-file copy. The mapping is unmapped as soon as the build finishes. Other platforms (e.g. Windows) transparently fall back to a full read.
+
 **Async preemption** — `GODEBUG=asyncpreemptoff=1` (Go runtime flag). Inference spends most of its time in tight compute loops; on hosts where delivering preemption signals is expensive (notably some VMs), Go's async preemption can add meaningful overhead — measured ~16% of decode CPU on an AMD Ryzen 7 4700U VM, worth ~5–10% throughput to disable. This is a global runtime tradeoff (it can delay GC and goroutine scheduling), so it is opt-in via the environment rather than a default:
 
 ```bash
