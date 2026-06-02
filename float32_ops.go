@@ -72,6 +72,9 @@ type InferenceModelF32 struct {
 	// ctx, if set, cancels generation between decode steps. It lives on the
 	// per-request clone, so concurrent requests each carry their own.
 	ctx context.Context
+	// onToken, if set, receives each decoded text delta as it is generated.
+	// Like ctx, it lives on the per-request clone.
+	onToken func(string)
 }
 
 func growSlice(b []float32, n int) []float32 {

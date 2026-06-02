@@ -104,6 +104,28 @@ text, _, _, _, _, err := scriptlingllmlib.GenerateWithCacheContext(
 // err == context.Canceled if the client went away; text holds the partial output.
 ```
 
+### `GenerateWithCacheStream`
+
+```go
+func GenerateWithCacheStream(
+    ctx context.Context,
+    // ...same parameters as GenerateWithCache...
+    onToken func(delta string),
+) (text string, generatedTokens int, promptTokens int, prefillMs float64, decodeMs float64, err error)
+```
+
+Streams output as it is generated. If `onToken` is non-nil it is called with each decoded text **delta** as tokens are produced; the complete `text` is still returned at the end. Byte-level tokens are buffered internally so every delta is valid UTF-8 (a multi-byte rune split across tokens is held back until complete). `onToken` runs on the calling goroutine inside the decode loop — keep it fast and do not call back into the same model from it. `ctx` cancels exactly as in `GenerateWithCacheContext`.
+
+```go
+_, _, _, _, _, err := scriptlingllmlib.GenerateWithCacheStream(
+    ctx, "model.gguf", prompt, 512, "greedy", 1.0, 50, 0.9, 1.15, 64, "", "", sessionID,
+    func(delta string) {
+        fmt.Fprint(w, delta) // e.g. write a server-sent-events chunk
+        flusher.Flush()
+    },
+)
+```
+
 ### `ClearSessionWithCache`
 
 ```go

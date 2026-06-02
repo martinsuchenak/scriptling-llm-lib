@@ -44,13 +44,41 @@ func GenerateWithCacheContext(
 	templateName string,
 	sessionID string,
 ) (string, int, int, float64, float64, error) {
+	return GenerateWithCacheStream(
+		ctx, modelPath, prompt, maxTokens, strategy, temperature,
+		topK, topP, repeatPenalty, repeatLastN, systemPrompt, templateName, sessionID, nil,
+	)
+}
+
+// GenerateWithCacheStream is GenerateWithCacheContext with streaming. If onToken
+// is non-nil it is called with each decoded text delta as tokens are produced
+// (byte-level tokens are buffered so every delta is valid UTF-8). The full text
+// is still returned at the end. onToken runs on the calling goroutine inside the
+// decode loop, so keep it fast; it must not call back into this model. Pass a nil
+// onToken for non-streaming behaviour.
+func GenerateWithCacheStream(
+	ctx context.Context,
+	modelPath string,
+	prompt string,
+	maxTokens int,
+	strategy string,
+	temperature float64,
+	topK int,
+	topP float64,
+	repeatPenalty float64,
+	repeatLastN int,
+	systemPrompt string,
+	templateName string,
+	sessionID string,
+	onToken func(string),
+) (string, int, int, float64, float64, error) {
 	shared, err := globalModelCacheF32.getOrLoad(modelPath)
 	if err != nil {
 		return "", 0, 0, 0, 0, err
 	}
 
 	result, nGen, nPrompt, prefillMs, decodeMs := runGenerate(
-		ctx, shared, modelPath, prompt, maxTokens, strategy, temperature,
+		ctx, onToken, shared, modelPath, prompt, maxTokens, strategy, temperature,
 		topK, topP, repeatPenalty, repeatLastN, systemPrompt, templateName, sessionID,
 	)
 	return result, nGen, nPrompt, prefillMs, decodeMs, ctx.Err()

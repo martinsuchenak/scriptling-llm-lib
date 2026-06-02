@@ -7,7 +7,25 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 )
+
+// validUTF8PrefixLen returns the length of the longest prefix of s that ends on
+// a UTF-8 rune boundary, i.e. excluding any trailing bytes of an incomplete
+// multi-byte rune. Byte-level BPE can split one rune across several tokens, so
+// the streaming path holds back a partial trailing rune until it completes.
+func validUTF8PrefixLen(s string) int {
+	n := len(s)
+	for i := 1; i <= utf8.UTFMax && i <= n; i++ {
+		if utf8.RuneStart(s[n-i]) {
+			if utf8.ValidString(s[n-i:]) {
+				return n
+			}
+			return n - i
+		}
+	}
+	return n
+}
 
 type modelCacheF32 struct {
 	mu       sync.Mutex
@@ -91,10 +109,11 @@ func (c *modelCacheF32) clearSession(modelPath, sessionID string) {
 // persistent clone and serializes the session's turns. Safe to call concurrently
 // for different (or empty) session IDs. ctx cancels generation between decode
 // steps; pass context.Background() for no cancellation.
-func runGenerate(ctx context.Context, shared *InferenceModelF32, modelPath, prompt string, maxTokens int, strategy string, temperature float64, topK int, topP, repeatPenalty float64, repeatLastN int, systemPrompt, templateName, sessionID string) (result string, nGen, nPrompt int, prefillMs, decodeMs float64) {
+func runGenerate(ctx context.Context, onToken func(string), shared *InferenceModelF32, modelPath, prompt string, maxTokens int, strategy string, temperature float64, topK int, topP, repeatPenalty float64, repeatLastN int, systemPrompt, templateName, sessionID string) (result string, nGen, nPrompt int, prefillMs, decodeMs float64) {
 	if sessionID == "" {
 		m := shared.clone()
 		m.ctx = ctx
+		m.onToken = onToken
 		result, nGen, nPrompt, _ = m.Generate(prompt, maxTokens, strategy, temperature, topK, topP, repeatPenalty, repeatLastN, systemPrompt, templateName, 0)
 		return result, nGen, nPrompt, m.PrefillMs, m.DecodeMs
 	}
@@ -102,7 +121,8 @@ func runGenerate(ctx context.Context, shared *InferenceModelF32, modelPath, prom
 	entry.mu.Lock()
 	defer entry.mu.Unlock()
 	entry.model.ctx = ctx
-	defer func() { entry.model.ctx = nil }()
+	entry.model.onToken = onToken
+	defer func() { entry.model.ctx = nil; entry.model.onToken = nil }()
 	var finalPos int
 	result, nGen, nPrompt, finalPos = entry.model.Generate(prompt, maxTokens, strategy, temperature, topK, topP, repeatPenalty, repeatLastN, systemPrompt, templateName, entry.pos)
 	entry.pos = finalPos
@@ -528,6 +548,36 @@ func (m *InferenceModelF32) Generate(prompt string, maxTokens int, strategy stri
 	tokenIDs := m.Tokenizer.Encode(prompt)
 	nPrompt := len(tokenIDs)
 
+	// Streaming emitter: on each call, decode the generated tokens so far and
+	// emit the new, UTF-8-safe suffix as a delta. final=true flushes any held
+	// trailing bytes. Leading whitespace is trimmed to match Decode's output.
+	emitted := 0
+	leadingDone := false
+	emit := func(final bool) {
+		if m.onToken == nil {
+			return
+		}
+		full := m.Tokenizer.decodeRaw(tokenIDs[nPrompt:])
+		end := len(full)
+		if !final && end > emitted {
+			end = emitted + validUTF8PrefixLen(full[emitted:])
+		}
+		if end <= emitted {
+			return
+		}
+		chunk := full[emitted:end]
+		emitted = end
+		if !leadingDone {
+			chunk = strings.TrimLeft(chunk, " ")
+			if chunk != "" {
+				leadingDone = true
+			}
+		}
+		if chunk != "" {
+			m.onToken(chunk)
+		}
+	}
+
 	if kvStartPos == 0 {
 		m.initKVCaches()
 	}
@@ -572,12 +622,14 @@ func (m *InferenceModelF32) Generate(prompt string, maxTokens int, strategy stri
 
 	if nextID == m.Tokenizer.EOSID {
 		finalPos := kvStartPos + nPrompt
+		emit(true)
 		output := m.Tokenizer.Decode(tokenIDs[nPrompt:])
 		if m.Arch == "qwen3" {
 			output = stripThinkTags(output)
 		}
 		return output, 1, nPrompt, finalPos
 	}
+	emit(false)
 
 	nGen := 1
 	for step := 1; step < maxTokens; step++ {
@@ -605,7 +657,9 @@ func (m *InferenceModelF32) Generate(prompt string, maxTokens int, strategy stri
 		if nextID == m.Tokenizer.EOSID {
 			break
 		}
+		emit(false)
 	}
+	emit(true)
 
 	finalPos := kvStartPos + nPrompt + nGen - 1
 	tDecodeEnd := time.Now()
