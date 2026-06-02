@@ -19,7 +19,7 @@ The library is a single Go package (`scriptlingllmlib`) with these logical group
 | Area | Files | Description |
 |------|-------|-------------|
 | **Library registration** | `llm.go` | Registers 55+ functions as the `llm` Scriptling library |
-| **Model loading** | `gguf.go` | GGUF v3 parser — F32, F16, Q4_0, Q4_1, Q5_0, Q8_0 |
+| **Model loading** | `gguf.go`, `kquants.go` | GGUF v3 parser — F32, F16, Q4_0/1, Q5_0/1, Q8_0, and k-quants Q2_K–Q6_K |
 | **Inference model** | `model.go` | Transformer forward pass, KV cache, autoregressive generation |
 | **Tokenizer** | `tokenizer.go` | BPE tokenizer with sentencepiece + GPT-2 byte-fallback |
 | **Chat templates** | `chat_template.go` | ChatML/Jinja2 template rendering |
@@ -37,16 +37,22 @@ The library is a single Go package (`scriptlingllmlib`) with these logical group
 
 ## Supported GGUF Tensor Types
 
-| Type | Block Size | Elements/Block | Used For |
-|------|-----------|----------------|----------|
-| F32 | 4 | 1 | Norms, biases |
-| F16 | 2 | 1 | Token embeddings (dequantized) |
-| Q4_0 | 18 | 32 | Weight matrices |
-| Q4_1 | 20 | 32 | Weight matrices (with min offset) |
-| Q5_0 | 22 | 32 | Weight matrices |
-| Q8_0 | 34 | 32 | Weight matrices, token embeddings |
+| Type | Block / Super-block | Elements | Path | Used For |
+|------|-----------|----------|------|----------|
+| F32 | 4 B | 1 | float | Norms, biases |
+| F16 | 2 B | 1 | float | Token embeddings |
+| Q4_0 | 18 B | 32 | packed kernel | Weight matrices |
+| Q4_1 | 20 B | 32 | packed kernel | Weight matrices (with min offset) |
+| Q5_0 | 22 B | 32 | packed kernel | Weight matrices |
+| Q5_1 | 24 B | 32 | dense float | k-quant fallback rows |
+| Q8_0 | 34 B | 32 | packed kernel | Weight matrices, token embeddings |
+| Q2_K | 84 B | 256 | dense float | Weight matrices |
+| Q3_K | 110 B | 256 | dense float | Weight matrices |
+| Q4_K | 144 B | 256 | dense float | Weight matrices |
+| Q5_K | 176 B | 256 | dense float | Weight matrices |
+| Q6_K | 210 B | 256 | dense float | Weight matrices |
 
-K-quant types (Q4_K, Q4_K_M, Q6_K, etc.) are not supported. Use `_Q8_0` or `_Q4_0` variants from [bartowski's GGUF collection](https://huggingface.co/bartowski).
+K-quant models (e.g. `Q4_K_M`, `Q5_K_M`, `Q6_K`) load and run correctly: their super-blocks are dequantized to dense float32 and use the exact float matmul. This is correct but uses more memory than the packed legacy quants and skips the integer kernels — packed k-quant kernels are future work. Unsupported quantizations (the IQ-family *i-quants*, e.g. `IQ4_NL`, which some k-quant repacks use for rows whose width isn't a multiple of 256) are rejected with a clear error rather than loading silently corrupted weights. For the fastest path, prefer `_Q8_0` or `_Q4_0` variants from [bartowski's GGUF collection](https://huggingface.co/bartowski).
 
 ## Go API
 

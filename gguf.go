@@ -763,6 +763,9 @@ func (g *GGUFModel) loadTensor1DF32(name string) ([]float32, error) {
 		}
 		return result, nil
 	default:
+		if !tensorTypeSupported(ti.Type) {
+			return nil, fmt.Errorf("gguf: tensor %q has unsupported type %d", name, ti.Type)
+		}
 		f64 := g.dequantize1D(fileData, ti, nElements)
 		return f64ToF32(f64), nil
 	}
@@ -798,6 +801,9 @@ func (g *GGUFModel) loadTensor2DF32(name string) ([]float32, int, int, error) {
 		}
 		return result, rows, cols, nil
 	default:
+		if !tensorTypeSupported(ti.Type) {
+			return nil, 0, 0, fmt.Errorf("gguf: tensor %q has unsupported type %d", name, ti.Type)
+		}
 		f64 := g.dequantize1D(fileData, ti, nElements)
 		return f64ToF32(f64), rows, cols, nil
 	}
@@ -853,8 +859,20 @@ func (g *GGUFModel) loadWeightF32Direct(name string) (interface{}, error) {
 		raw := make([]byte, totalBytes)
 		copy(raw, fileData[offset:offset+totalBytes])
 		return &QuantWeight{QType: "q5", Raw: raw, Groups: groupsPerRow, Rows: rows, Cols: cols}, nil
+	case 7, 10, 11, 12, 13, 14:
+		// K-quants (and the legacy Q5_1 fallback) have no dedicated packed kernel
+		// here, so dequantize them to dense float32 and use the exact float
+		// matmul. Requantizing to Q8_0 would save memory and use the fast integer
+		// path, but measurably degrades accuracy at scale (the int8-activation
+		// kernel compounds the double-quantization), so correctness wins here;
+		// packed k-quant kernels are future work.
+		flat := g.dequantize1D(fileData, ti, nElements)
+		return f64ToF32(flat), nil
 	}
 
+	if !tensorTypeSupported(ti.Type) {
+		return nil, fmt.Errorf("gguf: tensor %q has unsupported type %d", name, ti.Type)
+	}
 	f32, _, _, err := g.loadTensor2DF32(name)
 	if err != nil {
 		return nil, err
@@ -875,12 +893,32 @@ func (g *GGUFModel) dequantize1D(fileData []byte, ti *tensorInfo, nElements int)
 		return dequantizeQ4_1Native(fileData, offset, nElements)
 	case 6:
 		return dequantizeQ5_0Native(fileData, offset, nElements)
+	case 7:
+		return dequantizeQ5_1Native(fileData, offset, nElements)
 	case 8:
 		return dequantizeQ8_0Native(fileData, offset, nElements)
+	case 10:
+		return dequantizeQ2KNative(fileData, offset, nElements)
+	case 11:
+		return dequantizeQ3KNative(fileData, offset, nElements)
+	case 12:
+		return dequantizeQ4KNative(fileData, offset, nElements)
+	case 13:
+		return dequantizeQ5KNative(fileData, offset, nElements)
 	case 14:
 		return dequantizeQ6KNative(fileData, offset, nElements)
 	}
 	return make([]float64, nElements)
+}
+
+// tensorTypeSupported reports whether a GGUF tensor data type can be decoded.
+// Used to fail loudly on unknown quantizations instead of silently loading zeros.
+func tensorTypeSupported(t uint32) bool {
+	switch t {
+	case 0, 1, 2, 3, 6, 7, 8, 10, 11, 12, 13, 14:
+		return true
+	}
+	return false
 }
 
 func dequantizeQ6KNative(data []byte, offset int, nElements int) []float64 {
@@ -1018,13 +1056,15 @@ func quantizeQ8Rows(matrix [][]float64) *QuantWeight {
 			raw = append(raw, scaleBytes...)
 			invScale := 1.0 / scale
 			for i := 0; i < 32; i++ {
-				q := int8(row[base+i] * invScale)
-				if row[base+i]*invScale > 127 {
-					q = 127
-				} else if row[base+i]*invScale < -128 {
-					q = -128
+				val := row[base+i] * invScale
+				if val > 127 {
+					val = 127
+				} else if val < -128 {
+					val = -128
 				}
-				raw = append(raw, byte(q))
+				// Round to nearest (matching ggml). Truncating toward zero would
+				// systematically shrink every weight, biasing the logits.
+				raw = append(raw, byte(int8(math.Round(val))))
 			}
 		}
 	}
@@ -1070,13 +1110,13 @@ func quantizeQ8RowsF32(flat []float32, rows, cols int) *QuantWeight {
 			raw = append(raw, scaleBytes[:]...)
 			invScale := float32(1.0) / scale
 			for i := 0; i < 32; i++ {
-				q := int8(flat[base+i] * invScale)
-				if flat[base+i]*invScale > 127 {
-					q = 127
-				} else if flat[base+i]*invScale < -128 {
-					q = -128
+				val := float64(flat[base+i] * invScale)
+				if val > 127 {
+					val = 127
+				} else if val < -128 {
+					val = -128
 				}
-				raw = append(raw, byte(q))
+				raw = append(raw, byte(int8(math.Round(val))))
 			}
 		}
 	}

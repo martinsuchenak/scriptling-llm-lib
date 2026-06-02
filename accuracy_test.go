@@ -3,6 +3,7 @@ package scriptlingllmlib
 import (
 	"math"
 	"os"
+	"strings"
 	"testing"
 )
 
@@ -64,8 +65,13 @@ var pplGolden = []struct {
 	path string
 	want float64
 }{
-	{"models/SmolLM2-135M-Instruct-Q8_0.gguf", 12.785},
-	{"models/SmolLM2-135M-Instruct-Q4_0.gguf", 16.813},
+	{"models/SmolLM2-135M-Instruct-Q8_0.gguf", 12.763},
+	{"models/SmolLM2-135M-Instruct-Q4_0.gguf", 16.782},
+	// K-quant models (mixed quant). These exercise the Q4_K/Q5_K/Q6_K (and the
+	// Q5_0/Q5_1 fallback) dequantizers; they skip when the file is absent.
+	{"models/SmolLM2-135M-Instruct-Q4_K_M.gguf", 12.953}, // Q4_K + Q6_K + Q5_0 + Q8
+	{"models/SmolLM2-135M-Instruct-Q6_K.gguf", 12.934},   // Q6_K
+	{"models/SmolLM2-135M-Instruct-Q5_K_M.gguf", 11.864}, // Q5_K + Q5_1 + Q6_K
 }
 
 const pplTol = 0.10
@@ -75,6 +81,11 @@ const pplTol = 0.10
 // band, and finite.
 func TestPerplexityRegression(t *testing.T) {
 	for _, g := range pplGolden {
+		// In -short mode keep only the two base-quant models; the k-quant models
+		// (each a separate multi-second load) run in the full suite.
+		if testing.Short() && strings.Contains(g.path, "_K") {
+			continue
+		}
 		m := loadModelForTest(t, g.path)
 		ids := m.Tokenizer.Encode(pplText)
 		got := perplexity(m, ids)
