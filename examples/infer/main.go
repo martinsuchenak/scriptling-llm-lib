@@ -28,6 +28,7 @@ func main() {
 	embedConcurrency := flag.Int("embed-concurrency", 1, "Embedding mode: number of concurrent embedders (aggregate emb/s across cores)")
 	embedBatch := flag.Int("embed-batch", 1, "Embedding mode: texts per EmbedBatch call (one packed forward pass)")
 	embedSecs := flag.Float64("embed-secs", 1.5, "Embedding mode: seconds to run the timed loop (raise for profiling)")
+	kernelInfo := flag.Bool("kernel-info", false, "Print the selected compute kernels for this host and exit")
 
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage: %s -model <path> -prompt <text> [options]\n\n", os.Args[0])
@@ -42,6 +43,11 @@ func main() {
 		fmt.Fprintf(os.Stderr, "  top_p        nucleus sampling up to cumulative probability P\n")
 	}
 	flag.Parse()
+
+	if *kernelInfo {
+		fmt.Println(scriptlingllmlib.KernelInfo())
+		return
+	}
 
 	if *model == "" {
 		fmt.Fprintln(os.Stderr, "error: -model is required")
