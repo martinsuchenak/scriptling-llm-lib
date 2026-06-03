@@ -909,6 +909,18 @@ func (g *GGUFModel) loadWeightF32Direct(name string) (interface{}, error) {
 		// Q5_1 fallback and Q2_K/Q3_K (no packed kernel yet): dense float32.
 		flat := g.dequantize1D(fileData, ti, nElements)
 		return f64ToF32(flat), nil
+	case 20:
+		// IQ4_NL: codebook values are already int8, so requantizing to Q8_0 is
+		// near-lossless and runs on the fast q8q8 kernel. Blocks are 32 elements
+		// (cols always divisible by 32 for this type).
+		if cols%32 == 0 && useInt8Q8 {
+			flat := g.dequantize1D(fileData, ti, nElements)
+			if qw := quantizeQ8Rows(reshape2D(flat, rows, cols)); qw != nil {
+				return qw, nil
+			}
+		}
+		flat := g.dequantize1D(fileData, ti, nElements)
+		return f64ToF32(flat), nil
 	}
 
 	if !tensorTypeSupported(ti.Type) {
@@ -948,6 +960,8 @@ func (g *GGUFModel) dequantize1D(fileData []byte, ti *tensorInfo, nElements int)
 		return dequantizeQ5KNative(fileData, offset, nElements)
 	case 14:
 		return dequantizeQ6KNative(fileData, offset, nElements)
+	case 20:
+		return dequantizeIQ4NLNative(fileData, offset, nElements)
 	}
 	return make([]float64, nElements)
 }
@@ -956,7 +970,7 @@ func (g *GGUFModel) dequantize1D(fileData []byte, ti *tensorInfo, nElements int)
 // Used to fail loudly on unknown quantizations instead of silently loading zeros.
 func tensorTypeSupported(t uint32) bool {
 	switch t {
-	case 0, 1, 2, 3, 6, 7, 8, 10, 11, 12, 13, 14:
+	case 0, 1, 2, 3, 6, 7, 8, 10, 11, 12, 13, 14, 20:
 		return true
 	}
 	return false

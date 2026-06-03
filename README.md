@@ -51,12 +51,16 @@ The library is a single Go package (`scriptlingllmlib`) with these logical group
 | Q4_K | 144 B | 256 | dense float | Weight matrices |
 | Q5_K | 176 B | 256 | dense float | Weight matrices |
 | Q6_K | 210 B | 256 | dense float | Weight matrices |
+| IQ4_NL | 18 B | 32 | → Q8_0 kernel | i-quant fallback rows |
 
 K-quant models (e.g. `Q4_K_M`, `Q5_K_M`, `Q6_K`) load and run correctly.
 
 - **Q4_K is fast by default.** It is re-expressed as `Q4_1` (a lossless per-32 `scale·q4 + min` mapping) and runs on the existing **fused int8 SIMD kernel** (`q41q8`, AVX2 + NEON) — ~6× less memory than dense float and **~3× faster decode** (e.g. 1.7B `Q4_K_M` on an M5 Max: 10.7 → 32 t/s). This kicks in automatically wherever the fast int8 kernel is available; on hosts without it (no AVX2/NEON) Q4_K falls back to dense float32.
 - **Q5_K is fast by default** too. A 5-bit Q5_K value is `q4 + 16·high_bit`, so it splits into two Q4_1 weights (low nibbles + high bit) that are summed — both run on the same fused `q41q8` SIMD kernel. Near-lossless and compact, default on int8-capable hosts (two passes, so a smaller speedup than Q4_K's single pass, but still well above dense).
-- **Q6_K is fast by default** too. It is symmetric (no min) like `Q8_0`, and Q8's 8 bits capture the 6-bit values near-losslessly, so it is requantized to `Q8_0` and runs on the fused `q8q8` SIMD kernel. This matters beyond pure Q6_K models — Q6_K is ~20% of `Q4_K_M` / `Q5_K_M` (the `ffn_down` and `output` tensors), so it speeds those up too. Default on int8-capable hosts; dense float elsewhere. Unsupported quantizations (the IQ-family *i-quants*, e.g. `IQ4_NL`, which some k-quant repacks use for rows whose width isn't a multiple of 256) are rejected with a clear error rather than loading silently corrupted weights. For the fastest path, prefer `_Q8_0` or `_Q4_0` variants from [bartowski's GGUF collection](https://huggingface.co/bartowski).
+- **Q6_K is fast by default** too. It is symmetric (no min) like `Q8_0`, and Q8's 8 bits capture the 6-bit values near-losslessly, so it is requantized to `Q8_0` and runs on the fused `q8q8` SIMD kernel. This matters beyond pure Q6_K models — Q6_K is ~20% of `Q4_K_M` / `Q5_K_M` (the `ffn_down` and `output` tensors), so it speeds those up too. Default on int8-capable hosts; dense float elsewhere.
+- **IQ4_NL** is supported too (some k-quant repacks of small models use it for rows whose width isn't a multiple of 256). Its values are a fixed non-linear int8 codebook, so it requantizes losslessly to `Q8_0` and runs on the `q8q8` kernel. Other IQ-family *i-quants* (`IQ2_*`, `IQ3_*`, `IQ4_XS`, …) are not yet implemented and are rejected with a clear error rather than loading silently corrupted weights.
+
+For the fastest path, prefer `_Q8_0` or `_Q4_0` variants from [bartowski's GGUF collection](https://huggingface.co/bartowski).
 
 ## Go API
 

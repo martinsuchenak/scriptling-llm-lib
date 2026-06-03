@@ -2,6 +2,30 @@ package scriptlingllmlib
 
 import "encoding/binary"
 
+// iq4nlValues is the fixed 16-entry non-linear codebook for IQ4_NL / IQ4_XS
+// (ggml kvalues_iq4nl). The 4-bit index selects one of these int8 levels.
+var iq4nlValues = [16]int8{-127, -104, -83, -65, -49, -35, -22, -10, 1, 13, 25, 38, 53, 69, 89, 113}
+
+// dequantizeIQ4NLNative decodes IQ4_NL (GGUF type 20): 32-element blocks of
+// f16 scale + 16 nibble bytes, weight = d * codebook[nibble]. Nibbles use the
+// Q4_0 split layout — qs[j]'s low nibble is element j, its high nibble element
+// j+16. IQ4_NL is an i-quant (non-linear codebook) that some k-quant repacks use
+// for rows whose width isn't a multiple of 256.
+func dequantizeIQ4NLNative(data []byte, offset, nElements int) []float64 {
+	const blockBytes = 18
+	result := make([]float64, nElements)
+	for b := 0; b < nElements/32; b++ {
+		base := offset + b*blockBytes
+		d := float16ToFloat64(binary.LittleEndian.Uint16(data[base:]))
+		qs := data[base+2:]
+		for j := 0; j < 16; j++ {
+			result[b*32+j] = d * float64(iq4nlValues[qs[j]&0x0F])
+			result[b*32+16+j] = d * float64(iq4nlValues[qs[j]>>4])
+		}
+	}
+	return result
+}
+
 // dequantizeQ5_1Native decodes Q5_1 (GGUF type 7), a legacy 32-element block
 // quant (d, min, 5-bit quants). It is not a k-quant, but k-quant model repacks
 // use it as the fallback for rows whose width isn't a multiple of 256, so the

@@ -1,37 +1,33 @@
 package scriptlingllmlib
 
 import (
-	"os"
-	"strings"
 	"testing"
 )
 
-// TestUnsupportedQuantErrors verifies that a model using a quantization the
-// library does not implement (e.g. the IQ-family i-quants, GGUF type 20 used by
-// some k-quant repacks for non-256-divisible rows) fails to build with a clear
-// error rather than silently loading zeroed weights.
+// TestUnsupportedQuantErrors verifies the support gate: types the library can
+// decode are accepted, and others (the remaining IQ-family i-quants) are flagged
+// so loadWeight* fails loudly instead of loading zeroed/garbage weights.
 func TestUnsupportedQuantErrors(t *testing.T) {
-	// These 135M repacks fall back to IQ4_NL (type 20) for the 576-wide rows.
-	for _, path := range []string{
-		"models/SmolLM2-135M-Instruct-Q3_K_L.gguf",
-		"models/SmolLM2-135M-Instruct-Q2_K.gguf",
-	} {
-		if _, err := os.Stat(path); err != nil {
-			continue
+	supported := []uint32{
+		0, 1, // F32, F16
+		2, 3, 6, 7, 8, // Q4_0, Q4_1, Q5_0, Q5_1, Q8_0
+		10, 11, 12, 13, 14, // Q2_K..Q6_K
+		20, // IQ4_NL
+	}
+	for _, ty := range supported {
+		if !tensorTypeSupported(ty) {
+			t.Errorf("type %d should be supported", ty)
 		}
-		g, err := LoadGGUF(path)
-		if err != nil {
-			t.Fatalf("LoadGGUF(%s): %v", path, err)
-		}
-		g.Metadata["_path"] = path
-		_, err = buildInferenceModelF32(g, path)
-		g.ReleaseFileData()
-		if err == nil {
-			t.Errorf("%s: expected build to fail on unsupported quant type, got nil", path)
-			continue
-		}
-		if !strings.Contains(err.Error(), "unsupported type") {
-			t.Errorf("%s: error = %q, want it to mention 'unsupported type'", path, err)
+	}
+	// Still-unimplemented i-quants must be rejected.
+	unsupported := []uint32{
+		16, 17, 18, 19, // IQ2_XXS, IQ2_XS, IQ3_XXS, IQ1_S
+		21, 22, 23, // IQ3_S, IQ2_S, IQ4_XS
+		99, // nonexistent
+	}
+	for _, ty := range unsupported {
+		if tensorTypeSupported(ty) {
+			t.Errorf("type %d should NOT be supported", ty)
 		}
 	}
 }
