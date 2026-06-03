@@ -12,6 +12,31 @@ result = llm.generate("model.gguf", "Hello", 40, "greedy", temperature=0.0)
 print(result)
 ```
 
+## Supported models
+
+The decoder loader is generic: it reads every config value from the GGUF
+`<arch>.*` metadata, so any **llama-family** model — RMSNorm, RoPE, grouped-query
+attention, SwiGLU FFN — runs without per-model code. In practice that covers most
+current open-weight chat models.
+
+| Kind | Models | GGUF arch |
+|------|--------|-----------|
+| **Decoder LLMs** (generation) | Llama (incl. Llama 3.2), Qwen2 / Qwen2.5, Qwen3, Mistral, TinyLlama, SmolLM2 | `llama`, `qwen2`, `qwen3`, `mistral` |
+| **Encoder embeddings** (`Embed` / `EmbedBatch`) | all-MiniLM-L6-v2, BGE, E5, GTE, nomic-embed-text | `bert`, `nomic-bert` |
+| **Decoder embedders** (`Embed`, last-token pooling) | e5-mistral, gte-Qwen2 | `llama`, `qwen2` |
+
+Chat formatting uses the model's own embedded Jinja `chat_template` from the GGUF,
+with built-in fallbacks (`chatml`, `llama2`, `llama3`, `mistral`, `smollm2`).
+
+**Not supported:** architectures that need ops outside the llama-family path —
+notably **Gemma/Gemma2** (logit soft-cap, tied embeddings, attention scaling) and
+**Phi** (partial RoPE, parallel attention). These may load but won't generate
+correctly. IQ-family quants other than `IQ4_NL` are rejected with a clear error.
+
+Quantization is independent of architecture: F32, F16, Q4_0/1, Q5_0/1, Q8_0, and
+k-quants Q2_K–Q6_K + IQ4_NL all work on any supported model (see
+[supported tensor types](#supported-gguf-tensor-types)).
+
 ## Architecture
 
 The library is a single Go package (`scriptlingllmlib`) with these logical groups:
