@@ -186,13 +186,17 @@ bench_host() {
 }
 
 profile_host() {
-	load_host "$1"
+	load_host "$1"; shift
 	local model toks rprof lprof
-	model="$2"; toks="${3:-150}"
+	model="$1"; shift
+	toks="150"
+	# Optional numeric token count; any remaining args are forwarded to infer
+	# (e.g. -embed-batch 64 -embed-secs 8 to profile the batched embedding path).
+	if [ $# -gt 0 ] && [[ "$1" =~ ^[0-9]+$ ]]; then toks="$1"; shift; fi
 	ensure_dirs; push_binary; ensure_model "$model"
 	rprof="$RDIR/cpu.prof"; is_local && rprof="/tmp/fleet-$NAME.prof"
-	echo "[$NAME] profiling $model ($toks tokens)..."
-	rsh "$(infer_cmd "$(resolve_model "$model")" "$toks" "$rprof")" >/dev/null 2>&1 || true
+	echo "[$NAME] profiling $model ($toks tokens${*:+, args: $*})..."
+	rsh "$(infer_cmd "$(resolve_model "$model")" "$toks" "$rprof" "$@")" >/dev/null 2>&1 || true
 	lprof="$BINDIR/${NAME}.prof"
 	if is_local; then cp "$rprof" "$lprof"; else scp $SSH_OPTS -q "$SSH:$rprof" "$lprof" || die "[$NAME] could not fetch profile"; fi
 	echo "[$NAME] top functions:"

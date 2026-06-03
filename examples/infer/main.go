@@ -27,6 +27,7 @@ func main() {
 	embed := flag.Bool("embed", false, "Embedding mode: embed -prompt and report throughput (auto-enabled for encoder models)")
 	embedConcurrency := flag.Int("embed-concurrency", 1, "Embedding mode: number of concurrent embedders (aggregate emb/s across cores)")
 	embedBatch := flag.Int("embed-batch", 1, "Embedding mode: texts per EmbedBatch call (one packed forward pass)")
+	embedSecs := flag.Float64("embed-secs", 1.5, "Embedding mode: seconds to run the timed loop (raise for profiling)")
 
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage: %s -model <path> -prompt <text> [options]\n\n", os.Args[0])
@@ -71,7 +72,7 @@ func main() {
 	// throughput instead. Auto-detected from the model architecture.
 	arch, _ := scriptlingllmlib.ModelArch(*model)
 	if *embed || scriptlingllmlib.IsEmbeddingArch(arch) {
-		runEmbedBench(*model, *prompt, *embedConcurrency, *embedBatch)
+		runEmbedBench(*model, *prompt, *embedConcurrency, *embedBatch, *embedSecs)
 		return
 	}
 
@@ -113,13 +114,17 @@ func main() {
 // that matters for batch workloads. Stats are tagged with "prefill"/"decode" so
 // the bench harness picks them up; an encoder has no decode loop, so they carry
 // per-embed latency (ms) and throughput (emb/s).
-func runEmbedBench(model, text string, concurrency, batch int) {
+func runEmbedBench(model, text string, concurrency, batch int, secs float64) {
 	if concurrency < 1 {
 		concurrency = 1
 	}
 	if batch < 1 {
 		batch = 1
 	}
+	if secs <= 0 {
+		secs = 1.5
+	}
+	window := time.Duration(secs * float64(time.Second))
 	v, err := scriptlingllmlib.Embed(scriptlingllmlib.EmbedOptions{Model: model, Text: text, Normalize: true})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
@@ -149,7 +154,7 @@ func runEmbedBench(model, text string, concurrency, batch int) {
 			}
 		}()
 	}
-	for time.Since(start) < 1500*time.Millisecond {
+	for time.Since(start) < window {
 		time.Sleep(10 * time.Millisecond)
 	}
 	atomic.StoreInt32(&stop, 1)
