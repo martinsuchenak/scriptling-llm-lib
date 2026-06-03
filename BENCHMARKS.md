@@ -94,21 +94,19 @@ keep dense float32 (no regression). See the [supported tensor types](README.md#s
 
 ## What the numbers show
 
-- **Apple Silicon leads on decode**, largely from memory bandwidth: the M5 Max's
-  unified memory feeds the weight stream far faster than the x86 boxes' DDR, and it
-  is ~2× the M2 Max across the board.
-- **`Q4_K_M` < `Q4_0`, even though both are 4-bit.** `Q4_0` uses the simpler `q4q8`
-  kernel (no min term); `Q4_K`'s `q41q8` carries the per-group `min` correction plus
-  an f16/float scalar tail. That gap is structural, not a missing optimization — and
-  the leaner NEON path hides it better than x86 (on the 9900X, `Q4_K_M` is actually a
-  touch slower than `Q8_0`).
-- **Decode is compute-bound on fast CPUs, not bandwidth-bound** — e.g. the M5 Max at
-  26–33 t/s on a 1.7B k-quant moves only ~50–60 GB/s, well under its memory ceiling.
-  So the win came from a faster *kernel* (int8 SIMD), not from moving fewer bytes.
-  (On the slow/old hosts it is the opposite — dense float compute dominates.)
-- **k-quants now run everywhere**, including the small-model `Q2_K` / `Q3_K_L` repacks
-  that are mostly `IQ4_NL` (their 576-wide rows aren't a multiple of 256), which
-  previously failed to load.
+- **Apple Silicon leads on decode**, mostly from memory bandwidth: the M5 Max's
+  unified memory feeds the weight stream faster than the x86 hosts' DDR, and runs
+  ~2× the M2 Max throughout.
+- **`Q4_K_M` decodes slower than `Q4_0` despite both being 4-bit.** `Q4_0` uses the
+  simpler `q4q8` kernel; `Q4_K` (`q41q8`) carries a per-group `min` correction and an
+  f16 scalar tail. The gap is structural, and the leaner NEON path hides it better
+  than x86 — on the 9900X `Q4_K_M` even trails `Q8_0`.
+- **Decode is compute-bound on fast CPUs.** The M5 Max at 26–33 t/s on a 1.7B
+  k-quant moves only ~50–60 GB/s, well under its memory ceiling, so throughput tracks
+  kernel speed (int8 SIMD) rather than bytes moved. Slow and old hosts are the
+  reverse: dense-float compute dominates.
+- **k-quants run on every supported host**, including the small-model `Q2_K` /
+  `Q3_K_L` repacks that are mostly `IQ4_NL` (576-wide rows, not a multiple of 256).
 
 See [Performance tuning](README.md#performance-tuning) for the `SLLM_Q8_KERNEL`,
 `SLLM_PARALLEL_THRESHOLD`, and `SLLM_KQUANT_PACKED` knobs.
