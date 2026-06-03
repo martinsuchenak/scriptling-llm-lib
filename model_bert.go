@@ -7,31 +7,45 @@ import (
 )
 
 // InferenceBert is a BERT-style bidirectional encoder, used by sentence-embedding
-// models (all-MiniLM, BGE, E5, GTE, …). Unlike the decoder model it has no causal
-// mask or KV cache: the whole sequence is encoded in one pass and pooled into a
-// single vector. It reuses the quantized matmul kernels for the weight matrices.
+// models. It handles two GGUF architectures:
+//   - "bert" (all-MiniLM, BGE, E5, GTE): learned position embeddings, separate
+//     q/k/v with biases, plain GELU MLP.
+//   - "nomic-bert" (nomic-embed-text): RoPE instead of positions, a fused QKV
+//     matrix with no biases, and a gated GeGLU FFN.
+//
+// There is no causal mask or KV cache: the whole sequence is encoded in one pass
+// and pooled into a single vector. The weight matrices reuse the quantized matmul
+// kernels.
 type InferenceBert struct {
 	Dim, NHeads, NLayers, FFN, MaxPos int
 	Eps                               float32
 	pooling                           string // "mean" (default) or "cls"
 
+	useRope     bool
+	ropeNeox    bool
+	ropeFreqs   []float32
+	ropeHalfDim int
+	actMode     int // FFN activation: 0 = GELU (plain BERT), 2 = SiLU (gated/SwiGLU)
+
 	TokenEmb  []float32 // [vocab][dim] dense
-	PosEmb    []float32 // [maxpos][dim]
-	TypeEmb   []float32 // [2][dim] (only type 0 used for single-sentence input)
+	PosEmb    []float32 // [maxpos][dim]; nil when useRope
+	TypeEmb   []float32 // [2][dim] (type 0 used for single-sentence input)
 	VocabSize int
 
-	EmbNormW, EmbNormB []float32 // LayerNorm applied to summed embeddings
+	EmbNormW, EmbNormB []float32
 	Layers             []bertLayer
 	Tok                *wordPiece
 }
 
 type bertLayer struct {
-	Wq, Wk, Wv, Wo       interface{} // *QuantWeight or []float32
-	Bq, Bk, Bv, Bo       []float32
-	AttnNormW, AttnNormB []float32 // post-attention LayerNorm
+	Wqkv                 interface{} // fused QKV (nomic); nil => separate Wq/Wk/Wv
+	Wq, Wk, Wv, Wo       interface{}
+	Bq, Bk, Bv, Bo       []float32 // nil where the model has no biases
+	AttnNormW, AttnNormB []float32
+	Wgate                interface{} // gated FFN (nomic); nil => plain GELU MLP
 	Wup, Wdown           interface{}
 	Bup, Bdown           []float32
-	OutNormW, OutNormB   []float32 // post-FFN LayerNorm
+	OutNormW, OutNormB   []float32
 }
 
 var bertCache = struct {
@@ -61,55 +75,76 @@ func getOrLoadBert(path string) (*InferenceBert, error) {
 
 func buildBertModel(g *GGUFModel) (*InferenceBert, error) {
 	md := g.Metadata
-	dim := metaInt(md, "bert.embedding_length", 0)
-	nLayers := metaInt(md, "bert.block_count", 0)
+	arch := metaString(md, "general.architecture", "bert")
+	p := arch + "." // "bert." or "nomic-bert."
+	dim := metaInt(md, p+"embedding_length", 0)
+	nLayers := metaInt(md, p+"block_count", 0)
 	if dim == 0 || nLayers == 0 {
-		return nil, fmt.Errorf("bert: missing embedding_length/block_count")
+		return nil, fmt.Errorf("%s: missing embedding_length/block_count", arch)
 	}
 	m := &InferenceBert{
 		Dim:     dim,
-		NHeads:  metaInt(md, "bert.attention.head_count", 12),
+		NHeads:  metaInt(md, p+"attention.head_count", 12),
 		NLayers: nLayers,
-		FFN:     metaInt(md, "bert.feed_forward_length", 4*dim),
-		MaxPos:  metaInt(md, "bert.context_length", 512),
-		Eps:     float32(metaFloat(md, "bert.attention.layer_norm_epsilon", 1e-12)),
+		FFN:     metaInt(md, p+"feed_forward_length", 4*dim),
+		MaxPos:  metaInt(md, p+"context_length", 512),
+		Eps:     float32(metaFloat(md, p+"attention.layer_norm_epsilon", 1e-12)),
 		pooling: "mean",
 	}
-	if metaInt(md, "bert.pooling_type", 1) == 2 {
+	if metaInt(md, p+"pooling_type", 1) == 2 {
 		m.pooling = "cls"
 	}
+	if freqBase := metaFloat(md, p+"rope.freq_base", 0); freqBase > 0 {
+		m.useRope = true
+		m.ropeNeox = true // nomic-bert uses NEOX (rotate-half) rotary
+		headDim := dim / m.NHeads
+		ropeDim := metaInt(md, p+"rope.dimension_count", headDim)
+		m.ropeHalfDim = ropeDim / 2
+		m.ropeFreqs = make([]float32, m.ropeHalfDim)
+		for i := 0; i < m.ropeHalfDim; i++ {
+			m.ropeFreqs[i] = float32(1.0 / math.Pow(freqBase, 2.0*float64(i)/float64(ropeDim)))
+		}
+	}
 
+	var err error
 	emb, vocab, _, err := g.loadTensor2DF32("token_embedding.weight")
 	if err != nil {
-		return nil, fmt.Errorf("bert: token_embedding: %w", err)
+		return nil, fmt.Errorf("%s: token_embedding: %w", arch, err)
 	}
 	m.TokenEmb, m.VocabSize = emb, vocab
-	if m.PosEmb, _, _, err = g.loadTensor2DF32("position_embd.weight"); err != nil {
-		return nil, fmt.Errorf("bert: position_embd: %w", err)
+	if !m.useRope {
+		if m.PosEmb, _, _, err = g.loadTensor2DF32("position_embd.weight"); err != nil {
+			return nil, fmt.Errorf("%s: position_embd: %w", arch, err)
+		}
 	}
-	if m.TypeEmb, _, _, err = g.loadTensor2DF32("token_types.weight"); err != nil {
-		return nil, fmt.Errorf("bert: token_types: %w", err)
-	}
+	m.TypeEmb, _, _, _ = g.loadTensor2DF32("token_types.weight")
 	m.EmbNormW, _ = g.loadTensor1DF32("token_embd_norm.weight")
 	m.EmbNormB, _ = g.loadTensor1DF32("token_embd_norm.bias")
 
 	m.Layers = make([]bertLayer, nLayers)
 	for i := 0; i < nLayers; i++ {
 		w := fmt.Sprintf("blocks.%d.", i) // mapped weight names
-		b := fmt.Sprintf("blk.%d.", i)    // raw bias/norm names
+		b := fmt.Sprintf("blk.%d.", i)    // raw bias/norm/fused names
 		L := &m.Layers[i]
-		if L.Wq, err = g.loadWeightF32Direct(w + "attn.w_q.weight"); err != nil {
-			return nil, fmt.Errorf("bert: layer %d w_q: %w", i, err)
+
+		if qkv, qerr := g.loadWeightF32Direct(b + "attn_qkv.weight"); qerr == nil && qkv != nil {
+			L.Wqkv = qkv
+		} else {
+			if L.Wq, err = g.loadWeightF32Direct(w + "attn.w_q.weight"); err != nil {
+				return nil, fmt.Errorf("%s: layer %d q: %w", arch, i, err)
+			}
+			L.Wk, _ = g.loadWeightF32Direct(w + "attn.w_k.weight")
+			L.Wv, _ = g.loadWeightF32Direct(w + "attn.w_v.weight")
+			L.Bq, _ = g.loadTensor1DF32(b + "attn_q.bias")
+			L.Bk, _ = g.loadTensor1DF32(b + "attn_k.bias")
+			L.Bv, _ = g.loadTensor1DF32(b + "attn_v.bias")
 		}
-		L.Wk, _ = g.loadWeightF32Direct(w + "attn.w_k.weight")
-		L.Wv, _ = g.loadWeightF32Direct(w + "attn.w_v.weight")
 		L.Wo, _ = g.loadWeightF32Direct(w + "attn.w_o.weight")
-		L.Bq, _ = g.loadTensor1DF32(b + "attn_q.bias")
-		L.Bk, _ = g.loadTensor1DF32(b + "attn_k.bias")
-		L.Bv, _ = g.loadTensor1DF32(b + "attn_v.bias")
 		L.Bo, _ = g.loadTensor1DF32(b + "attn_output.bias")
 		L.AttnNormW, _ = g.loadTensor1DF32(b + "attn_output_norm.weight")
 		L.AttnNormB, _ = g.loadTensor1DF32(b + "attn_output_norm.bias")
+
+		L.Wgate, _ = g.loadWeightF32Direct(w + "ffn.w_gate.weight") // nil if absent
 		L.Wup, _ = g.loadWeightF32Direct(w + "ffn.w_up.weight")
 		L.Wdown, _ = g.loadWeightF32Direct(w + "ffn.w_down.weight")
 		L.Bup, _ = g.loadTensor1DF32(b + "ffn_up.bias")
@@ -118,8 +153,15 @@ func buildBertModel(g *GGUFModel) (*InferenceBert, error) {
 		L.OutNormB, _ = g.loadTensor1DF32(b + "layer_output_norm.bias")
 	}
 
+	// A gated FFN (Wgate present) is SwiGLU (SiLU activation); a plain up→down FFN
+	// is GELU. Verified against llama.cpp: all-MiniLM (plain/GELU) matches at
+	// cosine 0.999, nomic (gated/SiLU) at 0.996.
+	if m.Layers[0].Wgate != nil {
+		m.actMode = 2 // SiLU
+	}
+
 	if g.Tokenizer == nil || len(g.Tokenizer.Vocab) == 0 {
-		return nil, fmt.Errorf("bert: missing tokenizer vocab")
+		return nil, fmt.Errorf("%s: missing tokenizer vocab", arch)
 	}
 	m.Tok = newWordPiece(
 		g.Tokenizer.Vocab,
@@ -140,19 +182,28 @@ func (m *InferenceBert) embed(text, pooling string, normalize bool) []float32 {
 	dim := m.Dim
 	headDim := dim / m.NHeads
 
-	// Embeddings: token + position + token-type(0), then LayerNorm.
+	// Embeddings: token + (position if no RoPE) + token-type(0), then LayerNorm.
 	x := make([]float32, n*dim)
 	for i, id := range ids {
 		if id >= m.VocabSize {
 			id = 0
 		}
-		pos := i
-		if pos >= m.MaxPos {
-			pos = m.MaxPos - 1
-		}
-		to, te, pe := i*dim, id*dim, pos*dim
+		to, te := i*dim, id*dim
 		for d := 0; d < dim; d++ {
-			x[to+d] = m.TokenEmb[te+d] + m.PosEmb[pe+d] + m.TypeEmb[d]
+			x[to+d] = m.TokenEmb[te+d]
+			if m.TypeEmb != nil {
+				x[to+d] += m.TypeEmb[d]
+			}
+		}
+		if !m.useRope && m.PosEmb != nil {
+			pos := i
+			if pos >= m.MaxPos {
+				pos = m.MaxPos - 1
+			}
+			pe := pos * dim
+			for d := 0; d < dim; d++ {
+				x[to+d] += m.PosEmb[pe+d]
+			}
 		}
 	}
 	bertLayerNorm(x, n, dim, m.EmbNormW, m.EmbNormB, m.Eps)
@@ -160,16 +211,32 @@ func (m *InferenceBert) embed(text, pooling string, normalize bool) []float32 {
 	q := make([]float32, n*dim)
 	k := make([]float32, n*dim)
 	v := make([]float32, n*dim)
+	qkv := make([]float32, n*3*dim)
 	att := make([]float32, n*dim)
 	o := make([]float32, n*dim)
 	up := make([]float32, n*m.FFN)
+	gate := make([]float32, n*m.FFN)
 	down := make([]float32, n*dim)
 
 	for li := range m.Layers {
 		L := &m.Layers[li]
-		bertLinear(L.Wq, x, n, dim, dim, L.Bq, q)
-		bertLinear(L.Wk, x, n, dim, dim, L.Bk, k)
-		bertLinear(L.Wv, x, n, dim, dim, L.Bv, v)
+		if L.Wqkv != nil {
+			bertLinear(L.Wqkv, x, n, dim, 3*dim, nil, qkv)
+			for i := 0; i < n; i++ {
+				src, dq := i*3*dim, i*dim
+				copy(q[dq:dq+dim], qkv[src:src+dim])
+				copy(k[dq:dq+dim], qkv[src+dim:src+2*dim])
+				copy(v[dq:dq+dim], qkv[src+2*dim:src+3*dim])
+			}
+		} else {
+			bertLinear(L.Wq, x, n, dim, dim, L.Bq, q)
+			bertLinear(L.Wk, x, n, dim, dim, L.Bk, k)
+			bertLinear(L.Wv, x, n, dim, dim, L.Bv, v)
+		}
+		if m.useRope {
+			bertApplyRope(q, n, m.NHeads, headDim, m.ropeFreqs, m.ropeHalfDim, m.ropeNeox)
+			bertApplyRope(k, n, m.NHeads, headDim, m.ropeFreqs, m.ropeHalfDim, m.ropeNeox)
+		}
 		bertAttention(q, k, v, n, m.NHeads, headDim, att)
 		bertLinear(L.Wo, att, n, dim, dim, L.Bo, o)
 		for i := range x {
@@ -177,9 +244,18 @@ func (m *InferenceBert) embed(text, pooling string, normalize bool) []float32 {
 		}
 		bertLayerNorm(x, n, dim, L.AttnNormW, L.AttnNormB, m.Eps)
 
-		bertLinear(L.Wup, x, n, dim, m.FFN, L.Bup, up)
-		for i := range up {
-			up[i] = float32(gelu(float64(up[i])))
+		if L.Wgate != nil {
+			// Gated GeGLU FFN: gelu(x·Wgate) ⊙ (x·Wup), then ·Wdown.
+			bertLinear(L.Wgate, x, n, dim, m.FFN, nil, gate)
+			bertLinear(L.Wup, x, n, dim, m.FFN, nil, up)
+			for i := range up {
+				up[i] = bertAct(gate[i], m.actMode) * up[i]
+			}
+		} else {
+			bertLinear(L.Wup, x, n, dim, m.FFN, L.Bup, up)
+			for i := range up {
+				up[i] = bertAct(up[i], m.actMode)
+			}
 		}
 		bertLinear(L.Wdown, up, n, m.FFN, dim, L.Bdown, down)
 		for i := range x {
@@ -191,7 +267,7 @@ func (m *InferenceBert) embed(text, pooling string, normalize bool) []float32 {
 	out := make([]float32, dim)
 	if pooling == "last" || pooling == "cls" {
 		copy(out, x[:dim]) // [CLS] is token 0
-	} else { // mean over all tokens
+	} else {
 		for i := 0; i < n; i++ {
 			for d := 0; d < dim; d++ {
 				out[d] += x[i*dim+d]
@@ -251,8 +327,16 @@ func bertLinear(w interface{}, x []float32, rows, inDim, outDim int, bias, dst [
 	return res
 }
 
-// bertLayerNorm applies a per-row LayerNorm (mean-centered, with weight and bias)
-// in place.
+// bertAct applies the FFN activation: mode 2 = SiLU (gated SwiGLU FFN, e.g.
+// nomic-bert), anything else = GELU (plain BERT FFN). Selected per model.
+func bertAct(x float32, mode int) float32 {
+	if mode == 2 {
+		return x / (1 + float32(math.Exp(float64(-x))))
+	}
+	return float32(gelu(float64(x)))
+}
+
+// bertLayerNorm applies a per-row LayerNorm (mean-centered, weight + bias) in place.
 func bertLayerNorm(x []float32, rows, dim int, w, b []float32, eps float32) {
 	for r := 0; r < rows; r++ {
 		off := r * dim
@@ -274,8 +358,34 @@ func bertLayerNorm(x []float32, rows, dim int, w, b []float32, eps float32) {
 	}
 }
 
-// bertAttention is full (bidirectional) multi-head attention over the sequence.
-// q/k/v are [seqLen][dim]; out is [seqLen][dim].
+// bertApplyRope rotates each head's first 2*halfDim lanes in place. neox=true
+// pairs lane j with j+halfDim (rotate-half); neox=false pairs 2j with 2j+1.
+func bertApplyRope(data []float32, n, nHeads, headDim int, freqs []float32, halfDim int, neox bool) {
+	dim := nHeads * headDim
+	for i := 0; i < n; i++ {
+		pos := float32(i)
+		for h := 0; h < nHeads; h++ {
+			off := i*dim + h*headDim
+			for j := 0; j < halfDim; j++ {
+				angle := freqs[j] * pos
+				c := float32(math.Cos(float64(angle)))
+				s := float32(math.Sin(float64(angle)))
+				var a, b int
+				if neox {
+					a, b = off+j, off+j+halfDim
+				} else {
+					a, b = off+2*j, off+2*j+1
+				}
+				x0, x1 := data[a], data[b]
+				data[a] = x0*c - x1*s
+				data[b] = x0*s + x1*c
+			}
+		}
+	}
+}
+
+// bertAttention is full (bidirectional) multi-head attention. q/k/v and out are
+// [seqLen][dim].
 func bertAttention(q, k, v []float32, seqLen, nHeads, headDim int, out []float32) {
 	dim := nHeads * headDim
 	scale := float32(1.0 / math.Sqrt(float64(headDim)))

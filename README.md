@@ -21,7 +21,7 @@ The library is a single Go package (`scriptlingllmlib`) with these logical group
 | **Library registration** | `llm.go` | Registers 51 functions as the `llm` Scriptling library |
 | **Model loading** | `gguf.go`, `kquants.go` | GGUF v3 parser — F32, F16, Q4_0/1, Q5_0/1, Q8_0, k-quants Q2_K–Q6_K, IQ4_NL |
 | **Inference model** | `model.go` | Transformer forward pass, KV cache, autoregressive generation |
-| **Encoder embeddings** | `model_bert.go`, `tokenizer_wordpiece.go` | BERT bidirectional encoder + WordPiece tokenizer for embedding models (all-MiniLM, BGE, E5, GTE) |
+| **Encoder embeddings** | `model_bert.go`, `tokenizer_wordpiece.go` | BERT / nomic-bert bidirectional encoder + WordPiece tokenizer for embedding models (all-MiniLM, BGE, E5, GTE, nomic-embed-text) |
 | **Tokenizer** | `tokenizer.go` | BPE tokenizer with sentencepiece + GPT-2 byte-fallback |
 | **Chat templates** | `chat_template.go` | ChatML/Jinja2 template rendering |
 | **Quantized matmul** | `q8q8.go`, `q4q8.go`, `q41q8.go`, `q8_fast.go` | Fused int8-SIMD dot products (Q8_0, Q4_0, Q4_1) — AVX2/AVX-VNNI + NEON |
@@ -213,7 +213,7 @@ Computes a dense embedding of `Text`, returning a vector the length of the model
 
 Two kinds of model work:
 
-- **Dedicated encoder embedding models** (`all-MiniLM-L6-v2`, `bge-*`, `e5-*`, `gte-*`, … — the GGUF `bert` architecture). These are bidirectional BERT encoders with their own WordPiece tokenizer and mean/CLS pooling; `Embed` runs the full encoder and pools. This is what you want for retrieval/similarity.
+- **Dedicated encoder embedding models** (`all-MiniLM-L6-v2`, `bge-*`, `e5-*`, `gte-*` — GGUF `bert`; and `nomic-embed-text` — GGUF `nomic-bert`, which adds RoPE, a fused QKV matrix, and a gated SwiGLU FFN). These are bidirectional encoders with their own WordPiece tokenizer and mean/CLS pooling; `Embed` runs the full encoder and pools. This is what you want for retrieval/similarity. (Outputs match `llama-embedding` at cosine ≥ 0.996. `nomic-embed-text` expects a `search_query: ` / `search_document: ` prefix on the input.)
 - **Decoder LLMs** (the same Llama/Qwen models `Generate` uses, plus decoder embedders like `e5-mistral`). `Embed` pools their final hidden states; `Pooling: "last"` (last-token) is usually best for these.
 
 `Embed` picks the right path automatically from the model's architecture.

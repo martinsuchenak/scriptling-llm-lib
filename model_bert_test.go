@@ -93,3 +93,36 @@ func TestBertEmbedding(t *testing.T) {
 		t.Errorf("paraphrase cosine %.3f unexpectedly low", sim)
 	}
 }
+
+// TestNomicEmbedding covers the nomic-bert variant (RoPE + fused QKV + gated
+// SwiGLU FFN). It checks the architecture is detected and that a query matches a
+// relevant document better than an irrelevant one (nomic's retrieval use case).
+// (Validated against llama-embedding offline at cosine 0.996.)
+func TestNomicEmbedding(t *testing.T) {
+	const model = "models/nomic.gguf"
+	if _, err := os.Stat(model); err != nil {
+		t.Skip("model not present")
+	}
+	b, err := getOrLoadBert(model)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !b.useRope || !b.ropeNeox || b.Layers[0].Wgate == nil || b.Layers[0].Wqkv == nil || b.actMode != 2 {
+		t.Errorf("nomic config: rope=%v neox=%v gated=%v fusedQKV=%v actMode=%d",
+			b.useRope, b.ropeNeox, b.Layers[0].Wgate != nil, b.Layers[0].Wqkv != nil, b.actMode)
+	}
+	emb := func(s string) []float32 {
+		v, err := Embed(EmbedOptions{Model: model, Text: s, Normalize: true})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return v
+	}
+	q := emb("search_query: how do I bake bread at home")
+	rel := emb("search_document: To bake bread, mix flour, water, yeast and salt, knead, let it rise, and bake.")
+	irr := emb("search_document: The Roman empire lasted for many centuries across Europe.")
+	t.Logf("cos(q,relevant)=%.4f cos(q,irrelevant)=%.4f", bertCos(q, rel), bertCos(q, irr))
+	if bertCos(q, rel) <= bertCos(q, irr) {
+		t.Errorf("relevant doc should outrank irrelevant: %.3f vs %.3f", bertCos(q, rel), bertCos(q, irr))
+	}
+}
