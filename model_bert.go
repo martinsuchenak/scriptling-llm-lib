@@ -219,6 +219,13 @@ func (m *InferenceBert) embedBatch(texts []string, pooling string, normalize boo
 // (embeddings, LayerNorm, residuals, FFN activation) is row-wise and batches
 // transparently.
 func (m *InferenceBert) forward(seqs [][]int) (x []float32, offsets, lengths []int) {
+	// Single-flight pool: a lone batch parallelizes every matmul/glue step across
+	// all cores; when several embeds run concurrently each falls back to serial and
+	// they parallelize across goroutines instead (and, crucially, never use the
+	// shared pool at the same time — that would be a data race).
+	enterInference()
+	defer exitInference()
+
 	dim := m.Dim
 	headDim := dim / m.NHeads
 	nSeq := len(seqs)
@@ -234,17 +241,31 @@ func (m *InferenceBert) forward(seqs [][]int) (x []float32, offsets, lengths []i
 	if T == 0 {
 		return nil, offsets, lengths
 	}
-
-	// Embeddings: token + (position if no RoPE) + token-type(0). Position is the
-	// index within each sequence, so it resets at every sequence boundary.
-	x = make([]float32, T*dim)
+	// Flat per-token id, within-sequence position, and owning sequence — lets the
+	// embedding lookup, RoPE, and attention each run as one parallel pass over all
+	// T tokens rather than a serial loop per sequence.
+	flatID := make([]int, T)
+	flatPos := make([]int, T)
+	seqOf := make([]int, T)
 	for s, ids := range seqs {
 		base := offsets[s]
 		for i, id := range ids {
+			flatID[base+i] = id
+			flatPos[base+i] = i
+			seqOf[base+i] = s
+		}
+	}
+
+	// Embeddings: token + (position if no RoPE) + token-type(0). Position resets
+	// per sequence (flatPos).
+	x = make([]float32, T*dim)
+	parallelFor(T, func(start, end int) {
+		for t := start; t < end; t++ {
+			id := flatID[t]
 			if id >= m.VocabSize {
 				id = 0
 			}
-			to, te := (base+i)*dim, id*dim
+			to, te := t*dim, id*dim
 			for d := 0; d < dim; d++ {
 				x[to+d] = m.TokenEmb[te+d]
 				if m.TypeEmb != nil {
@@ -252,7 +273,7 @@ func (m *InferenceBert) forward(seqs [][]int) (x []float32, offsets, lengths []i
 				}
 			}
 			if !m.useRope && m.PosEmb != nil {
-				pos := i
+				pos := flatPos[t]
 				if pos >= m.MaxPos {
 					pos = m.MaxPos - 1
 				}
@@ -262,7 +283,7 @@ func (m *InferenceBert) forward(seqs [][]int) (x []float32, offsets, lengths []i
 				}
 			}
 		}
-	}
+	})
 	bertLayerNorm(x, T, dim, m.EmbNormW, m.EmbNormB, m.Eps)
 
 	q := make([]float32, T*dim)
@@ -279,54 +300,61 @@ func (m *InferenceBert) forward(seqs [][]int) (x []float32, offsets, lengths []i
 		L := &m.Layers[li]
 		if L.Wqkv != nil {
 			bertLinear(L.Wqkv, x, T, dim, 3*dim, nil, qkv)
-			for i := 0; i < T; i++ {
-				src, dq := i*3*dim, i*dim
-				copy(q[dq:dq+dim], qkv[src:src+dim])
-				copy(k[dq:dq+dim], qkv[src+dim:src+2*dim])
-				copy(v[dq:dq+dim], qkv[src+2*dim:src+3*dim])
-			}
+			parallelFor(T, func(start, end int) {
+				for i := start; i < end; i++ {
+					src, dq := i*3*dim, i*dim
+					copy(q[dq:dq+dim], qkv[src:src+dim])
+					copy(k[dq:dq+dim], qkv[src+dim:src+2*dim])
+					copy(v[dq:dq+dim], qkv[src+2*dim:src+3*dim])
+				}
+			})
 		} else {
 			bertLinear(L.Wq, x, T, dim, dim, L.Bq, q)
 			bertLinear(L.Wk, x, T, dim, dim, L.Bk, k)
 			bertLinear(L.Wv, x, T, dim, dim, L.Bv, v)
 		}
-		// RoPE and attention are per sequence (block diagonal): slice each
-		// sequence's rows so positions reset and tokens stay within their sequence.
-		for s := 0; s < nSeq; s++ {
-			n := lengths[s]
-			off := offsets[s] * dim
-			if m.useRope {
-				bertApplyRope(q[off:], n, m.NHeads, headDim, m.ropeFreqs, m.ropeHalfDim, m.ropeNeox)
-				bertApplyRope(k[off:], n, m.NHeads, headDim, m.ropeFreqs, m.ropeHalfDim, m.ropeNeox)
-			}
-			bertAttention(q[off:], k[off:], v[off:], n, m.NHeads, headDim, att[off:])
+		// RoPE and attention are block diagonal (each token stays within its own
+		// sequence) but run as flat parallel passes over all T tokens.
+		if m.useRope {
+			bertApplyRopeFlat(q, flatPos, m.NHeads, headDim, m.ropeFreqs, m.ropeHalfDim, m.ropeNeox)
+			bertApplyRopeFlat(k, flatPos, m.NHeads, headDim, m.ropeFreqs, m.ropeHalfDim, m.ropeNeox)
 		}
+		bertAttentionFlat(q, k, v, offsets, lengths, seqOf, m.NHeads, headDim, att)
 		bertLinear(L.Wo, att, T, dim, dim, L.Bo, o)
-		for i := range x {
-			x[i] += o[i]
-		}
+		addInto(x, o)
 		bertLayerNorm(x, T, dim, L.AttnNormW, L.AttnNormB, m.Eps)
 
 		if L.Wgate != nil {
 			// Gated GeGLU FFN: act(x·Wgate) ⊙ (x·Wup), then ·Wdown.
 			bertLinear(L.Wgate, x, T, dim, m.FFN, nil, gate)
 			bertLinear(L.Wup, x, T, dim, m.FFN, nil, up)
-			for i := range up {
-				up[i] = bertAct(gate[i], m.actMode) * up[i]
-			}
+			parallelFor(len(up), func(start, end int) {
+				for i := start; i < end; i++ {
+					up[i] = bertAct(gate[i], m.actMode) * up[i]
+				}
+			})
 		} else {
 			bertLinear(L.Wup, x, T, dim, m.FFN, L.Bup, up)
-			for i := range up {
-				up[i] = bertAct(up[i], m.actMode)
-			}
+			parallelFor(len(up), func(start, end int) {
+				for i := start; i < end; i++ {
+					up[i] = bertAct(up[i], m.actMode)
+				}
+			})
 		}
 		bertLinear(L.Wdown, up, T, m.FFN, dim, L.Bdown, down)
-		for i := range x {
-			x[i] += down[i]
-		}
+		addInto(x, down)
 		bertLayerNorm(x, T, dim, L.OutNormW, L.OutNormB, m.Eps)
 	}
 	return x, offsets, lengths
+}
+
+// addInto does dst += src elementwise, parallelized for large batches.
+func addInto(dst, src []float32) {
+	parallelFor(len(dst), func(start, end int) {
+		for i := start; i < end; i++ {
+			dst[i] += src[i]
+		}
+	})
 }
 
 // pool reduces one sequence's hidden states (rows [off, off+n) of x) to a single
@@ -407,92 +435,111 @@ func bertAct(x float32, mode int) float32 {
 	return float32(gelu(float64(x)))
 }
 
-// bertLayerNorm applies a per-row LayerNorm (mean-centered, weight + bias) in place.
+// bertLayerNorm applies a per-row LayerNorm (mean-centered, weight + bias) in
+// place, parallelized over rows for large batches.
 func bertLayerNorm(x []float32, rows, dim int, w, b []float32, eps float32) {
-	for r := 0; r < rows; r++ {
-		off := r * dim
-		var mean float32
-		for i := 0; i < dim; i++ {
-			mean += x[off+i]
-		}
-		mean /= float32(dim)
-		var variance float32
-		for i := 0; i < dim; i++ {
-			d := x[off+i] - mean
-			variance += d * d
-		}
-		variance /= float32(dim)
-		inv := float32(1.0 / math.Sqrt(float64(variance)+float64(eps)))
-		for i := 0; i < dim; i++ {
-			x[off+i] = (x[off+i]-mean)*inv*w[i] + b[i]
-		}
-	}
-}
-
-// bertApplyRope rotates each head's first 2*halfDim lanes in place. neox=true
-// pairs lane j with j+halfDim (rotate-half); neox=false pairs 2j with 2j+1.
-func bertApplyRope(data []float32, n, nHeads, headDim int, freqs []float32, halfDim int, neox bool) {
-	dim := nHeads * headDim
-	for i := 0; i < n; i++ {
-		pos := float32(i)
-		for h := 0; h < nHeads; h++ {
-			off := i*dim + h*headDim
-			for j := 0; j < halfDim; j++ {
-				angle := freqs[j] * pos
-				c := float32(math.Cos(float64(angle)))
-				s := float32(math.Sin(float64(angle)))
-				var a, b int
-				if neox {
-					a, b = off+j, off+j+halfDim
-				} else {
-					a, b = off+2*j, off+2*j+1
-				}
-				x0, x1 := data[a], data[b]
-				data[a] = x0*c - x1*s
-				data[b] = x0*s + x1*c
+	parallelFor(rows, func(start, end int) {
+		for r := start; r < end; r++ {
+			off := r * dim
+			var mean float32
+			for i := 0; i < dim; i++ {
+				mean += x[off+i]
+			}
+			mean /= float32(dim)
+			var variance float32
+			for i := 0; i < dim; i++ {
+				d := x[off+i] - mean
+				variance += d * d
+			}
+			variance /= float32(dim)
+			inv := float32(1.0 / math.Sqrt(float64(variance)+float64(eps)))
+			for i := 0; i < dim; i++ {
+				x[off+i] = (x[off+i]-mean)*inv*w[i] + b[i]
 			}
 		}
-	}
+	})
 }
 
-// bertAttention is full (bidirectional) multi-head attention. q/k/v and out are
-// [seqLen][dim].
-func bertAttention(q, k, v []float32, seqLen, nHeads, headDim int, out []float32) {
+// bertApplyRopeFlat rotates each token's heads in place, with each token's
+// position taken from flatPos (so packed sequences each rotate from position 0).
+// neox=true pairs lane j with j+halfDim (rotate-half); neox=false pairs 2j,2j+1.
+// Parallelized over tokens.
+func bertApplyRopeFlat(data []float32, flatPos []int, nHeads, headDim int, freqs []float32, halfDim int, neox bool) {
+	dim := nHeads * headDim
+	parallelFor(len(flatPos), func(start, end int) {
+		for i := start; i < end; i++ {
+			pos := float32(flatPos[i])
+			for h := 0; h < nHeads; h++ {
+				off := i*dim + h*headDim
+				for j := 0; j < halfDim; j++ {
+					angle := freqs[j] * pos
+					c := float32(math.Cos(float64(angle)))
+					s := float32(math.Sin(float64(angle)))
+					var a, b int
+					if neox {
+						a, b = off+j, off+j+halfDim
+					} else {
+						a, b = off+2*j, off+2*j+1
+					}
+					x0, x1 := data[a], data[b]
+					data[a] = x0*c - x1*s
+					data[b] = x0*s + x1*c
+				}
+			}
+		}
+	})
+}
+
+// bertAttentionFlat is full (bidirectional) multi-head attention over a packed
+// batch: query token i attends only to keys in its own sequence (rows
+// [offsets[s], offsets[s]+lengths[s]) where s = seqOf[i]), so sequences stay
+// independent. q/k/v/out are [T][dim]. Parallelized over query tokens.
+func bertAttentionFlat(q, k, v []float32, offsets, lengths, seqOf []int, nHeads, headDim int, out []float32) {
 	dim := nHeads * headDim
 	scale := float32(1.0 / math.Sqrt(float64(headDim)))
-	scores := make([]float32, seqLen)
-	for h := 0; h < nHeads; h++ {
-		ho := h * headDim
-		for i := 0; i < seqLen; i++ {
-			qi := i*dim + ho
-			maxs := float32(math.Inf(-1))
-			for j := 0; j < seqLen; j++ {
-				kj := j*dim + ho
-				var s float32
+	T := len(seqOf)
+	parallelFor(T, func(start, end int) {
+		var scores []float32
+		for i := start; i < end; i++ {
+			s := seqOf[i]
+			base, n := offsets[s], lengths[s]
+			if cap(scores) < n {
+				scores = make([]float32, n)
+			} else {
+				scores = scores[:n]
+			}
+			for h := 0; h < nHeads; h++ {
+				ho := h * headDim
+				qi := i*dim + ho
+				maxs := float32(math.Inf(-1))
+				for j := 0; j < n; j++ {
+					kj := (base+j)*dim + ho
+					var sd float32
+					for d := 0; d < headDim; d++ {
+						sd += q[qi+d] * k[kj+d]
+					}
+					sd *= scale
+					scores[j] = sd
+					if sd > maxs {
+						maxs = sd
+					}
+				}
+				var sum float32
+				for j := 0; j < n; j++ {
+					e := float32(math.Exp(float64(scores[j] - maxs)))
+					scores[j] = e
+					sum += e
+				}
+				inv := 1.0 / sum
+				oi := i*dim + ho
 				for d := 0; d < headDim; d++ {
-					s += q[qi+d] * k[kj+d]
+					var acc float32
+					for j := 0; j < n; j++ {
+						acc += scores[j] * v[(base+j)*dim+ho+d]
+					}
+					out[oi+d] = acc * inv
 				}
-				s *= scale
-				scores[j] = s
-				if s > maxs {
-					maxs = s
-				}
-			}
-			var sum float32
-			for j := 0; j < seqLen; j++ {
-				e := float32(math.Exp(float64(scores[j] - maxs)))
-				scores[j] = e
-				sum += e
-			}
-			inv := 1.0 / sum
-			oi := i*dim + ho
-			for d := 0; d < headDim; d++ {
-				var acc float32
-				for j := 0; j < seqLen; j++ {
-					acc += scores[j] * v[j*dim+ho+d]
-				}
-				out[oi+d] = acc * inv
 			}
 		}
-	}
+	})
 }

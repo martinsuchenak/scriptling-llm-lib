@@ -3,6 +3,7 @@ package scriptlingllmlib
 import (
 	"math"
 	"os"
+	"sync"
 	"testing"
 )
 
@@ -150,6 +151,43 @@ func TestEmbedBatchMatchesSingle(t *testing.T) {
 	}
 	if !ran {
 		t.Skip("no embedding model present")
+	}
+}
+
+// TestEmbedConcurrentMatchesSerial guards the single-flight worker pool: many
+// concurrent embeds must each produce the same vector as a lone call (run with
+// -race to catch shared-pool data races).
+func TestEmbedConcurrentMatchesSerial(t *testing.T) {
+	if _, err := os.Stat(bertTestModel); err != nil {
+		t.Skip("model not present")
+	}
+	text := "A man is playing a guitar in the park."
+	want, err := Embed(EmbedOptions{Model: bertTestModel, Text: text, Normalize: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	const G = 16
+	results := make([][]float32, G)
+	var wg sync.WaitGroup
+	for g := 0; g < G; g++ {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			for r := 0; r < 8; r++ {
+				v, e := Embed(EmbedOptions{Model: bertTestModel, Text: text, Normalize: true})
+				if e != nil {
+					t.Error(e)
+					return
+				}
+				results[idx] = v
+			}
+		}(g)
+	}
+	wg.Wait()
+	for g := 0; g < G; g++ {
+		if c := bertCos(results[g], want); c < 0.99999 {
+			t.Errorf("goroutine %d diverged from serial: cosine %.6f", g, c)
+		}
 	}
 }
 
