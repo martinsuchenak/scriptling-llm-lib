@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 	"runtime/pprof"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	scriptlingllmlib "github.com/martinsuchenak/scriptling-llm-lib"
@@ -23,6 +25,7 @@ func main() {
 	repeatLastN := flag.Int("repeat-last-n", 64, "Token window considered for repeat penalty")
 	profPath := flag.String("prof", "", "Write a CPU profile to this path (for performance analysis)")
 	embed := flag.Bool("embed", false, "Embedding mode: embed -prompt and report throughput (auto-enabled for encoder models)")
+	embedConcurrency := flag.Int("embed-concurrency", 1, "Embedding mode: number of concurrent embedders (aggregate emb/s across cores)")
 
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage: %s -model <path> -prompt <text> [options]\n\n", os.Args[0])
@@ -67,7 +70,7 @@ func main() {
 	// throughput instead. Auto-detected from the model architecture.
 	arch, _ := scriptlingllmlib.ModelArch(*model)
 	if *embed || scriptlingllmlib.IsEmbeddingArch(arch) {
-		runEmbedBench(*model, *prompt)
+		runEmbedBench(*model, *prompt, *embedConcurrency)
 		return
 	}
 
@@ -102,10 +105,16 @@ func main() {
 		nGen, decodeMs, decodeTPS)
 }
 
-// runEmbedBench embeds the prompt repeatedly and reports throughput. Stats are
-// tagged with "prefill"/"decode" so the bench harness picks them up; an encoder
-// has no decode loop, so they carry latency (ms/embed) and throughput (emb/s).
-func runEmbedBench(model, text string) {
+// runEmbedBench embeds the prompt repeatedly and reports throughput. With
+// concurrency > 1 it drives that many goroutines (Embed is goroutine-safe and
+// runs on a private clone), reporting aggregate emb/s across cores — the figure
+// that matters for batch workloads. Stats are tagged with "prefill"/"decode" so
+// the bench harness picks them up; an encoder has no decode loop, so they carry
+// per-embed latency (ms) and throughput (emb/s).
+func runEmbedBench(model, text string, concurrency int) {
+	if concurrency < 1 {
+		concurrency = 1
+	}
 	v, err := scriptlingllmlib.Embed(scriptlingllmlib.EmbedOptions{Model: model, Text: text, Normalize: true})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
@@ -113,22 +122,40 @@ func runEmbedBench(model, text string) {
 	}
 	dim := len(v)
 
+	var runs int64
+	var wg sync.WaitGroup
+	stop := int32(0)
 	start := time.Now()
-	runs := 0
-	for time.Since(start) < 1500*time.Millisecond && runs < 2000 {
-		_, _ = scriptlingllmlib.Embed(scriptlingllmlib.EmbedOptions{Model: model, Text: text, Normalize: true})
-		runs++
+	for w := 0; w < concurrency; w++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for atomic.LoadInt32(&stop) == 0 {
+				_, _ = scriptlingllmlib.Embed(scriptlingllmlib.EmbedOptions{Model: model, Text: text, Normalize: true})
+				atomic.AddInt64(&runs, 1)
+			}
+		}()
 	}
+	for time.Since(start) < 1500*time.Millisecond {
+		time.Sleep(10 * time.Millisecond)
+	}
+	atomic.StoreInt32(&stop, 1)
+	wg.Wait()
+
 	elapsedMs := float64(time.Since(start).Microseconds()) / 1000
-	embPerSec := float64(runs) / (elapsedMs / 1000)
+	n := atomic.LoadInt64(&runs)
+	embPerSec := float64(n) / (elapsedMs / 1000)
+	// Wall latency per embed averaged over the in-flight streams (so a single
+	// stream still reports its true per-embed latency).
+	latency := elapsedMs / (float64(n) / float64(concurrency))
 
 	fmt.Printf("[%d-dim embedding]\n", dim)
 	fmt.Fprintln(os.Stderr, "---")
-	fmt.Fprintf(os.Stderr, "embed     %4d dims   %d runs in %6.0f ms\n", dim, runs, elapsedMs)
+	fmt.Fprintf(os.Stderr, "embed     %4d dims   %d runs in %6.0f ms   (%d stream(s))\n", dim, n, elapsedMs, concurrency)
 	// "prefill"/"decode" tags so the bench harness's parser picks these up; for an
 	// encoder they carry latency (ms/embed) and throughput (emb/s).
-	fmt.Fprintf(os.Stderr, "prefill   %4d dims   latency    %6.1f ms\n", dim, elapsedMs/float64(runs))
-	fmt.Fprintf(os.Stderr, "decode    %4d runs   throughput %6.1f emb/s\n", runs, embPerSec)
+	fmt.Fprintf(os.Stderr, "prefill   %4d dims   latency    %6.1f ms\n", dim, latency)
+	fmt.Fprintf(os.Stderr, "decode    %4d runs   throughput %6.1f emb/s\n", n, embPerSec)
 }
 
 func tokensPerSec(n int, ms float64) float64 {

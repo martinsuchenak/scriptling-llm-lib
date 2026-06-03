@@ -73,6 +73,15 @@ MODELS="all-MiniLM-L6-v2-Q8_0.gguf nomic-embed-text-v1.5.Q8_0.gguf" \
     ./bench/fleet.sh bench m5max
 ```
 
+The matrix is **single-stream** (one embed at a time ≈ one core for short texts).
+To measure **aggregate** throughput across all cores — the figure that matters for
+embedding a corpus, and what a batched `llama-embedding` run reports — drive
+several concurrent embedders (`Embed` is goroutine-safe):
+
+```bash
+./bench/fleet.sh run 9900x nomic-embed-text-v1.5.Q8_0.gguf -embed-concurrency 12
+```
+
 `bench` parses the prefill/decode `t/s` lines; `profile` fetches the `.prof`
 back and runs `go tool pprof -top` against the matching local build (cross-arch
 symbolization works because Go binaries carry their symbol table).
