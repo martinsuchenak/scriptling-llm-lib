@@ -34,7 +34,7 @@ func Embed(opts EmbedOptions) ([]float32, error) {
 	if err != nil {
 		return nil, err
 	}
-	if arch == "bert" || arch == "nomic-bert" {
+	if IsEmbeddingArch(arch) {
 		b, err := getOrLoadBert(opts.Model)
 		if err != nil {
 			return nil, err
@@ -57,6 +57,14 @@ func Embed(opts EmbedOptions) ([]float32, error) {
 	}
 	return m.embedTokens(ids, pooling, opts.Normalize), nil
 }
+
+// ModelArch returns a model's GGUF general.architecture (e.g. "llama", "qwen2",
+// "bert", "nomic-bert"), cached. Useful for telling generation models apart from
+// encoder embedding models.
+func ModelArch(path string) (string, error) { return ggufArch(path) }
+
+// IsEmbeddingArch reports whether arch is a dedicated encoder embedding model.
+func IsEmbeddingArch(arch string) bool { return arch == "bert" || arch == "nomic-bert" }
 
 // archCache memoizes a model's general.architecture so Embed can route without
 // re-parsing the GGUF on every call.

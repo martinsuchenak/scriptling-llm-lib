@@ -59,6 +59,19 @@ MODELS="SmolLM2-1.7B-Instruct-Q4_K_M.gguf SmolLM2-1.7B-Instruct-Q8_0.gguf" \
     ./bench/fleet.sh bench 9900x
 ```
 
+### Embedding models
+
+Encoder embedding models (`bert` / `nomic-bert` — all-MiniLM, BGE, E5, GTE,
+nomic-embed-text) are detected automatically: `infer` embeds the prompt instead
+of generating and reports **embeddings/second**. They appear in the same matrix —
+just drop the `.gguf` into the models dir and bench as usual (both the prefill and
+decode columns show `emb/s` for these, since an encoder has no decode loop):
+
+```bash
+MODELS="all-MiniLM-L6-v2-Q8_0.gguf nomic-embed-text-v1.5.Q8_0.gguf" \
+    ./bench/fleet.sh bench m5max
+```
+
 `bench` parses the prefill/decode `t/s` lines; `profile` fetches the `.prof`
 back and runs `go tool pprof -top` against the matching local build (cross-arch
 symbolization works because Go binaries carry their symbol table).

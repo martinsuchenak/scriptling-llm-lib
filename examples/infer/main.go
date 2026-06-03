@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"runtime/pprof"
+	"time"
 
 	scriptlingllmlib "github.com/martinsuchenak/scriptling-llm-lib"
 )
@@ -21,6 +22,7 @@ func main() {
 	repeatPenalty := flag.Float64("repeat-penalty", 1.1, "Repetition penalty — 1.0 disables it")
 	repeatLastN := flag.Int("repeat-last-n", 64, "Token window considered for repeat penalty")
 	profPath := flag.String("prof", "", "Write a CPU profile to this path (for performance analysis)")
+	embed := flag.Bool("embed", false, "Embedding mode: embed -prompt and report throughput (auto-enabled for encoder models)")
 
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage: %s -model <path> -prompt <text> [options]\n\n", os.Args[0])
@@ -61,6 +63,14 @@ func main() {
 		defer pprof.StopCPUProfile()
 	}
 
+	// Encoder models (BERT / nomic-bert) can't generate — embed and report
+	// throughput instead. Auto-detected from the model architecture.
+	arch, _ := scriptlingllmlib.ModelArch(*model)
+	if *embed || scriptlingllmlib.IsEmbeddingArch(arch) {
+		runEmbedBench(*model, *prompt)
+		return
+	}
+
 	result, nGen, nPrompt, prefillMs, decodeMs, err := scriptlingllmlib.GenerateWithCache(
 		*model,
 		*prompt,
@@ -90,6 +100,33 @@ func main() {
 		nPrompt, prefillMs, prefillTPS)
 	fmt.Fprintf(os.Stderr, "generated %4d tokens   decode  %6.0f ms   %6.1f t/s\n",
 		nGen, decodeMs, decodeTPS)
+}
+
+// runEmbedBench embeds the prompt repeatedly and reports throughput. Stats are
+// tagged with "prefill"/"decode" so the bench harness picks up the emb/s figure
+// (encoder models have no decode loop; both columns show emb/s).
+func runEmbedBench(model, text string) {
+	v, err := scriptlingllmlib.Embed(scriptlingllmlib.EmbedOptions{Model: model, Text: text, Normalize: true})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+	dim := len(v)
+
+	start := time.Now()
+	runs := 0
+	for time.Since(start) < 1500*time.Millisecond && runs < 2000 {
+		_, _ = scriptlingllmlib.Embed(scriptlingllmlib.EmbedOptions{Model: model, Text: text, Normalize: true})
+		runs++
+	}
+	elapsedMs := float64(time.Since(start).Microseconds()) / 1000
+	embPerSec := float64(runs) / (elapsedMs / 1000)
+
+	fmt.Printf("[%d-dim embedding]\n", dim)
+	fmt.Fprintln(os.Stderr, "---")
+	fmt.Fprintf(os.Stderr, "embed     %4d dims   %d runs in %6.0f ms\n", dim, runs, elapsedMs)
+	fmt.Fprintf(os.Stderr, "prefill   %4d dims   per-embed %5.1f ms   %6.1f emb/s\n", dim, elapsedMs/float64(runs), embPerSec)
+	fmt.Fprintf(os.Stderr, "decode    %4d runs   total   %6.0f ms   %6.1f emb/s\n", runs, elapsedMs, embPerSec)
 }
 
 func tokensPerSec(n int, ms float64) float64 {
