@@ -1,12 +1,31 @@
 package scriptlingllmlib
 
 import (
+	"context"
 	"fmt"
 	"math"
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 )
+
+// validUTF8PrefixLen returns the length of the longest prefix of s that ends on
+// a UTF-8 rune boundary, i.e. excluding any trailing bytes of an incomplete
+// multi-byte rune. Byte-level BPE can split one rune across several tokens, so
+// the streaming path holds back a partial trailing rune until it completes.
+func validUTF8PrefixLen(s string) int {
+	n := len(s)
+	for i := 1; i <= utf8.UTFMax && i <= n; i++ {
+		if utf8.RuneStart(s[n-i]) {
+			if utf8.ValidString(s[n-i:]) {
+				return n
+			}
+			return n - i
+		}
+	}
+	return n
+}
 
 type modelCacheF32 struct {
 	mu       sync.Mutex
@@ -15,8 +34,9 @@ type modelCacheF32 struct {
 }
 
 type sessionEntryF32 struct {
-	kvCaches []KVCacheF32
-	kvPos    int
+	model *InferenceModelF32 // clone holding this session's KV cache + scratch
+	pos   int                // KV position (tokens seen so far)
+	mu    sync.Mutex         // serializes turns of this session
 }
 
 var globalModelCacheF32 = &modelCacheF32{
@@ -36,13 +56,14 @@ func (c *modelCacheF32) getOrLoad(path string) (*InferenceModelF32, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Release the file image (unmapping it if mapped) on every path once the
+	// weights have been copied into the model.
+	defer gguf.ReleaseFileData()
 
 	model, err := buildInferenceModelF32(gguf, path)
 	if err != nil {
 		return nil, err
 	}
-
-	gguf.ReleaseFileData()
 
 	c.models[path] = model
 	return model, nil
@@ -55,29 +76,27 @@ func (c *modelCacheF32) clearModels() {
 	c.sessions = make(map[string]map[string]*sessionEntryF32)
 }
 
-func (c *modelCacheF32) getSession(modelPath, sessionID string) *sessionEntryF32 {
-	sessions, ok := c.sessions[modelPath]
-	if !ok {
-		return nil
+// getOrCreateSession returns the session's persistent clone, creating it (with a
+// fresh KV cache that shares the model's weights) on first use.
+func (c *modelCacheF32) getOrCreateSession(modelPath, sessionID string, shared *InferenceModelF32) *sessionEntryF32 {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	sessions := c.sessions[modelPath]
+	if sessions == nil {
+		sessions = make(map[string]*sessionEntryF32)
+		c.sessions[modelPath] = sessions
 	}
-	return sessions[sessionID]
-}
-
-func (c *modelCacheF32) saveSession(modelPath, sessionID string, caches []KVCacheF32, kvPos int) {
-	if _, ok := c.sessions[modelPath]; !ok {
-		c.sessions[modelPath] = make(map[string]*sessionEntryF32)
+	if e := sessions[sessionID]; e != nil {
+		return e
 	}
-	if entry, ok := c.sessions[modelPath][sessionID]; ok {
-		entry.kvPos = kvPos
-	} else {
-		c.sessions[modelPath][sessionID] = &sessionEntryF32{
-			kvCaches: copyKVCachesF32(caches),
-			kvPos:    kvPos,
-		}
-	}
+	e := &sessionEntryF32{model: shared.clone()}
+	sessions[sessionID] = e
+	return e
 }
 
 func (c *modelCacheF32) clearSession(modelPath, sessionID string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	if sessions, ok := c.sessions[modelPath]; ok {
 		delete(sessions, sessionID)
 		if len(sessions) == 0 {
@@ -86,19 +105,29 @@ func (c *modelCacheF32) clearSession(modelPath, sessionID string) {
 	}
 }
 
-func copyKVCachesF32(caches []KVCacheF32) []KVCacheF32 {
-	result := make([]KVCacheF32, len(caches))
-	for i, c := range caches {
-		result[i] = KVCacheF32{
-			K: make([][]float32, len(c.K)),
-			V: make([][]float32, len(c.V)),
-		}
-		for h := range c.K {
-			result[i].K[h] = append([]float32(nil), c.K[h]...)
-			result[i].V[h] = append([]float32(nil), c.V[h]...)
-		}
+// runGenerate runs one generation against the shared (read-only) model. Without
+// a session it uses a throwaway clone; with a session it uses that session's
+// persistent clone and serializes the session's turns. Safe to call concurrently
+// for different (or empty) session IDs. ctx cancels generation between decode
+// steps; pass context.Background() for no cancellation.
+func runGenerate(ctx context.Context, onToken func(string), shared *InferenceModelF32, modelPath, prompt string, maxTokens int, strategy string, temperature float64, topK int, topP, repeatPenalty float64, repeatLastN int, systemPrompt, templateName, sessionID string) (result string, nGen, nPrompt int, prefillMs, decodeMs float64) {
+	if sessionID == "" {
+		m := shared.clone()
+		m.ctx = ctx
+		m.onToken = onToken
+		result, nGen, nPrompt, _ = m.Generate(prompt, maxTokens, strategy, temperature, topK, topP, repeatPenalty, repeatLastN, systemPrompt, templateName, 0)
+		return result, nGen, nPrompt, m.PrefillMs, m.DecodeMs
 	}
-	return result
+	entry := globalModelCacheF32.getOrCreateSession(modelPath, sessionID, shared)
+	entry.mu.Lock()
+	defer entry.mu.Unlock()
+	entry.model.ctx = ctx
+	entry.model.onToken = onToken
+	defer func() { entry.model.ctx = nil; entry.model.onToken = nil }()
+	var finalPos int
+	result, nGen, nPrompt, finalPos = entry.model.Generate(prompt, maxTokens, strategy, temperature, topK, topP, repeatPenalty, repeatLastN, systemPrompt, templateName, entry.pos)
+	entry.pos = finalPos
+	return result, nGen, nPrompt, entry.model.PrefillMs, entry.model.DecodeMs
 }
 
 func buildInferenceModelF32(gguf *GGUFModel, path string) (*InferenceModelF32, error) {
@@ -307,12 +336,32 @@ func (m *InferenceModelF32) initKVCaches() {
 	b.logits = make([]float32, m.Config.VocabSize)
 }
 
-func (m *InferenceModelF32) Forward(tokenIDs []int, startPos int) []float32 {
-	seqLen := len(tokenIDs)
-	dModel := m.Config.DModel
+// clone returns an inference instance that shares this model's read-only weights
+// (the big tensors, tokenizer, rope tables — no copy) but has its own mutable
+// state: KV cache, scratch buffers, and timing stats. Each concurrent request
+// runs on its own clone, so requests never corrupt one another. Cheap: only the
+// per-request scratch (~hundreds of KB) is allocated, not the weights.
+func (m *InferenceModelF32) clone() *InferenceModelF32 {
+	c := *m // shallow copy shares all weight slices by reference
+	c.KVCaches = nil
+	c.bufs = blockBuffers{}
+	c.xDataBuf = nil
+	c.PrefillMs = 0
+	c.DecodeMs = 0
+	c.initKVCaches()
+	return &c
+}
+
+// runBlocks embeds the tokens and runs them through every transformer block,
+// returning the per-position hidden states (seqLen*dModel) prior to the output
+// projection. Shared by Forward (which projects to logits) and the embedding path
+// (which pools the hidden states).
+func (m *InferenceModelF32) runBlocks(tokenIDs []int, startPos int) (xData []float32, seqLen, dModel int) {
+	seqLen = len(tokenIDs)
+	dModel = m.Config.DModel
 
 	m.xDataBuf = growSlice(m.xDataBuf, seqLen*dModel)
-	xData := m.xDataBuf[:seqLen*dModel]
+	xData = m.xDataBuf[:seqLen*dModel]
 	for i, tid := range tokenIDs {
 		if tid < m.EmbRows {
 			copy(xData[i*dModel:], m.TokenEmb[tid*m.EmbCols:tid*m.EmbCols+dModel])
@@ -322,9 +371,12 @@ func (m *InferenceModelF32) Forward(tokenIDs []int, startPos int) []float32 {
 	for i := 0; i < m.Config.NLayers; i++ {
 		xData = m.forwardBlock(i, xData, seqLen, dModel, startPos)
 	}
+	return xData, seqLen, dModel
+}
 
-	logits := m.outputLogits(xData, seqLen, dModel)
-	return logits
+func (m *InferenceModelF32) Forward(tokenIDs []int, startPos int) []float32 {
+	xData, seqLen, dModel := m.runBlocks(tokenIDs, startPos)
+	return m.outputLogits(xData, seqLen, dModel)
 }
 
 func (m *InferenceModelF32) forwardBlock(blockIdx int, xData []float32, seqLen, dModel, startPos int) []float32 {
@@ -475,6 +527,12 @@ func (m *InferenceModelF32) outputLogits(xData []float32, seqLen, dModel int) []
 }
 
 func (m *InferenceModelF32) Generate(prompt string, maxTokens int, strategy string, temperature float64, topK int, topP float64, repeatPenalty float64, repeatLastN int, systemPrompt string, templateName string, kvStartPos int) (string, int, int, int) {
+	enterInference()
+	defer exitInference()
+	ctx := m.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	tGenStart := time.Now()
 	if kvStartPos == 0 {
 		if templateName != "" {
@@ -498,8 +556,43 @@ func (m *InferenceModelF32) Generate(prompt string, maxTokens int, strategy stri
 	tokenIDs := m.Tokenizer.Encode(prompt)
 	nPrompt := len(tokenIDs)
 
+	// Streaming emitter: on each call, decode the generated tokens so far and
+	// emit the new, UTF-8-safe suffix as a delta. final=true flushes any held
+	// trailing bytes. Leading whitespace is trimmed to match Decode's output.
+	emitted := 0
+	leadingDone := false
+	emit := func(final bool) {
+		if m.onToken == nil {
+			return
+		}
+		full := m.Tokenizer.decodeRaw(tokenIDs[nPrompt:])
+		end := len(full)
+		if !final && end > emitted {
+			end = emitted + validUTF8PrefixLen(full[emitted:])
+		}
+		if end <= emitted {
+			return
+		}
+		chunk := full[emitted:end]
+		emitted = end
+		if !leadingDone {
+			chunk = strings.TrimLeft(chunk, " ")
+			if chunk != "" {
+				leadingDone = true
+			}
+		}
+		if chunk != "" {
+			m.onToken(chunk)
+		}
+	}
+
 	if kvStartPos == 0 {
 		m.initKVCaches()
+	}
+
+	// Cancelled before any work: leave the KV cache untouched.
+	if ctx.Err() != nil {
+		return "", 0, nPrompt, kvStartPos
 	}
 
 	context := tokenIDs
@@ -537,15 +630,20 @@ func (m *InferenceModelF32) Generate(prompt string, maxTokens int, strategy stri
 
 	if nextID == m.Tokenizer.EOSID {
 		finalPos := kvStartPos + nPrompt
+		emit(true)
 		output := m.Tokenizer.Decode(tokenIDs[nPrompt:])
 		if m.Arch == "qwen3" {
 			output = stripThinkTags(output)
 		}
 		return output, 1, nPrompt, finalPos
 	}
+	emit(false)
 
 	nGen := 1
 	for step := 1; step < maxTokens; step++ {
+		if ctx.Err() != nil {
+			break
+		}
 		pos := kvStartPos + nPrompt + step - 1
 
 		logitsF32 = m.Forward([]int{nextID}, pos)
@@ -567,7 +665,9 @@ func (m *InferenceModelF32) Generate(prompt string, maxTokens int, strategy stri
 		if nextID == m.Tokenizer.EOSID {
 			break
 		}
+		emit(false)
 	}
+	emit(true)
 
 	finalPos := kvStartPos + nPrompt + nGen - 1
 	tDecodeEnd := time.Now()

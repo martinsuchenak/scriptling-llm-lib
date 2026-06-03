@@ -315,6 +315,13 @@ func (t *Tokenizer) bpe(symbols []string) []string {
 }
 
 func (t *Tokenizer) Decode(ids []int) string {
+	return strings.TrimSpace(t.decodeRaw(ids))
+}
+
+// decodeRaw is Decode without the final TrimSpace. It is prefix-stable \u2014
+// decodeRaw(ids[:n+1]) always begins with decodeRaw(ids[:n]) \u2014 which lets the
+// streaming path emit stable byte deltas as tokens arrive.
+func (t *Tokenizer) decodeRaw(ids []int) string {
 	var parts []string
 	for _, id := range ids {
 		tok, ok := t.IDToToken[id]
@@ -342,7 +349,6 @@ func (t *Tokenizer) Decode(ids []int) string {
 	}
 
 	text = strings.ReplaceAll(text, "\u2581", " ")
-	text = strings.TrimSpace(text)
 
 	return text
 }

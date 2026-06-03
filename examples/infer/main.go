@@ -4,6 +4,10 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"runtime/pprof"
+	"sync"
+	"sync/atomic"
+	"time"
 
 	scriptlingllmlib "github.com/martinsuchenak/scriptling-llm-lib"
 )
@@ -19,6 +23,12 @@ func main() {
 	topP := flag.Float64("top-p", 0.9, "Nucleus probability threshold (top_p strategy)")
 	repeatPenalty := flag.Float64("repeat-penalty", 1.1, "Repetition penalty — 1.0 disables it")
 	repeatLastN := flag.Int("repeat-last-n", 64, "Token window considered for repeat penalty")
+	profPath := flag.String("prof", "", "Write a CPU profile to this path (for performance analysis)")
+	embed := flag.Bool("embed", false, "Embedding mode: embed -prompt and report throughput (auto-enabled for encoder models)")
+	embedConcurrency := flag.Int("embed-concurrency", 1, "Embedding mode: number of concurrent embedders (aggregate emb/s across cores)")
+	embedBatch := flag.Int("embed-batch", 1, "Embedding mode: texts per EmbedBatch call (one packed forward pass)")
+	embedSecs := flag.Float64("embed-secs", 1.5, "Embedding mode: seconds to run the timed loop (raise for profiling)")
+	kernelInfo := flag.Bool("kernel-info", false, "Print the selected compute kernels for this host and exit")
 
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage: %s -model <path> -prompt <text> [options]\n\n", os.Args[0])
@@ -34,6 +44,11 @@ func main() {
 	}
 	flag.Parse()
 
+	if *kernelInfo {
+		fmt.Println(scriptlingllmlib.KernelInfo())
+		return
+	}
+
 	if *model == "" {
 		fmt.Fprintln(os.Stderr, "error: -model is required")
 		flag.Usage()
@@ -43,6 +58,28 @@ func main() {
 		fmt.Fprintln(os.Stderr, "error: -prompt is required")
 		flag.Usage()
 		os.Exit(1)
+	}
+
+	if *profPath != "" {
+		f, err := os.Create(*profPath)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error: cannot create profile %q: %v\n", *profPath, err)
+			os.Exit(1)
+		}
+		defer f.Close()
+		if err := pprof.StartCPUProfile(f); err != nil {
+			fmt.Fprintf(os.Stderr, "error: cannot start profile: %v\n", err)
+			os.Exit(1)
+		}
+		defer pprof.StopCPUProfile()
+	}
+
+	// Encoder models (BERT / nomic-bert) can't generate — embed and report
+	// throughput instead. Auto-detected from the model architecture.
+	arch, _ := scriptlingllmlib.ModelArch(*model)
+	if *embed || scriptlingllmlib.IsEmbeddingArch(arch) {
+		runEmbedBench(*model, *prompt, *embedConcurrency, *embedBatch, *embedSecs)
+		return
 	}
 
 	result, nGen, nPrompt, prefillMs, decodeMs, err := scriptlingllmlib.GenerateWithCache(
@@ -74,6 +111,75 @@ func main() {
 		nPrompt, prefillMs, prefillTPS)
 	fmt.Fprintf(os.Stderr, "generated %4d tokens   decode  %6.0f ms   %6.1f t/s\n",
 		nGen, decodeMs, decodeTPS)
+}
+
+// runEmbedBench embeds the prompt repeatedly and reports throughput. With
+// concurrency > 1 it drives that many goroutines (Embed is goroutine-safe), and
+// with batch > 1 each call embeds that many texts in one packed forward pass
+// (EmbedBatch) — together they report aggregate emb/s across cores, the figure
+// that matters for batch workloads. Stats are tagged with "prefill"/"decode" so
+// the bench harness picks them up; an encoder has no decode loop, so they carry
+// per-embed latency (ms) and throughput (emb/s).
+func runEmbedBench(model, text string, concurrency, batch int, secs float64) {
+	if concurrency < 1 {
+		concurrency = 1
+	}
+	if batch < 1 {
+		batch = 1
+	}
+	if secs <= 0 {
+		secs = 1.5
+	}
+	window := time.Duration(secs * float64(time.Second))
+	v, err := scriptlingllmlib.Embed(scriptlingllmlib.EmbedOptions{Model: model, Text: text, Normalize: true})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+	dim := len(v)
+	texts := make([]string, batch)
+	for i := range texts {
+		texts[i] = text
+	}
+
+	var runs int64
+	var wg sync.WaitGroup
+	stop := int32(0)
+	start := time.Now()
+	for w := 0; w < concurrency; w++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for atomic.LoadInt32(&stop) == 0 {
+				if batch > 1 {
+					_, _ = scriptlingllmlib.EmbedBatch(scriptlingllmlib.EmbedBatchOptions{Model: model, Texts: texts, Normalize: true})
+				} else {
+					_, _ = scriptlingllmlib.Embed(scriptlingllmlib.EmbedOptions{Model: model, Text: text, Normalize: true})
+				}
+				atomic.AddInt64(&runs, int64(batch))
+			}
+		}()
+	}
+	for time.Since(start) < window {
+		time.Sleep(10 * time.Millisecond)
+	}
+	atomic.StoreInt32(&stop, 1)
+	wg.Wait()
+
+	elapsedMs := float64(time.Since(start).Microseconds()) / 1000
+	n := atomic.LoadInt64(&runs)
+	embPerSec := float64(n) / (elapsedMs / 1000)
+	// Wall latency per embed averaged over the in-flight streams (so a single
+	// stream still reports its true per-embed latency).
+	latency := elapsedMs / (float64(n) / float64(concurrency))
+
+	fmt.Printf("[%d-dim embedding]\n", dim)
+	fmt.Fprintln(os.Stderr, "---")
+	fmt.Fprintf(os.Stderr, "embed     %4d dims   %d runs in %6.0f ms   (%d stream(s))\n", dim, n, elapsedMs, concurrency)
+	// "prefill"/"decode" tags so the bench harness's parser picks these up; for an
+	// encoder they carry latency (ms/embed) and throughput (emb/s).
+	fmt.Fprintf(os.Stderr, "prefill   %4d dims   latency    %6.1f ms\n", dim, latency)
+	fmt.Fprintf(os.Stderr, "decode    %4d runs   throughput %6.1f emb/s\n", n, embPerSec)
 }
 
 func tokensPerSec(n int, ms float64) float64 {

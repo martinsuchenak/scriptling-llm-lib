@@ -2,7 +2,7 @@
 
 Go library providing LLM inference primitives for the [Scriptling](https://github.com/paularlott/scriptling) runtime. Registered as the `llm` Scriptling library.
 
-→ [Performance benchmarks](BENCHMARKS.md) — M2 Max / M5 Max / Intel Xeon (AVX2), SmolLM2 135M–1.7B Q8_0
+→ [Performance benchmarks](BENCHMARKS.md) — 5-host fleet (M2/M5 Max, Ryzen 9900X, i5-8500T, Xeon X5675), SmolLM2 135M–1.7B across all quant types (k-quants ~3× via fast SIMD)
 
 ## Quick Start
 
@@ -12,18 +12,45 @@ result = llm.generate("model.gguf", "Hello", 40, "greedy", temperature=0.0)
 print(result)
 ```
 
+## Supported models
+
+The decoder loader is generic: it reads every config value from the GGUF
+`<arch>.*` metadata, so any **llama-family** model — RMSNorm, RoPE, grouped-query
+attention, SwiGLU FFN — runs without per-model code. In practice that covers most
+current open-weight chat models.
+
+| Kind | Models | GGUF arch |
+|------|--------|-----------|
+| **Decoder LLMs** (generation) | Llama (incl. Llama 3.2), Qwen2 / Qwen2.5, Qwen3, Mistral, TinyLlama, SmolLM2 | `llama`, `qwen2`, `qwen3`, `mistral` |
+| **Encoder embeddings** (`Embed` / `EmbedBatch`) | all-MiniLM-L6-v2, BGE, E5, GTE, nomic-embed-text | `bert`, `nomic-bert` |
+| **Decoder embedders** (`Embed`, last-token pooling) | e5-mistral, gte-Qwen2 | `llama`, `qwen2` |
+
+Chat formatting uses the model's own embedded Jinja `chat_template` from the GGUF,
+with built-in fallbacks (`chatml`, `llama2`, `llama3`, `mistral`, `smollm2`).
+
+**Not supported:** architectures that need ops outside the llama-family path —
+notably **Gemma/Gemma2** (logit soft-cap, tied embeddings, attention scaling) and
+**Phi** (partial RoPE, parallel attention). These may load but won't generate
+correctly. IQ-family quants other than `IQ4_NL` are rejected with a clear error.
+
+Quantization is independent of architecture: F32, F16, Q4_0/1, Q5_0/1, Q8_0, and
+k-quants Q2_K–Q6_K + IQ4_NL all work on any supported model (see
+[supported tensor types](#supported-gguf-tensor-types)).
+
 ## Architecture
 
 The library is a single Go package (`scriptlingllmlib`) with these logical groups:
 
 | Area | Files | Description |
 |------|-------|-------------|
-| **Library registration** | `llm.go` | Registers 55+ functions as the `llm` Scriptling library |
-| **Model loading** | `gguf.go` | GGUF v3 parser — F32, F16, Q4_0, Q4_1, Q5_0, Q8_0 |
+| **Library registration** | `llm.go` | Registers 52 functions as the `llm` Scriptling library |
+| **Model loading** | `gguf.go`, `kquants.go` | GGUF v3 parser — F32, F16, Q4_0/1, Q5_0/1, Q8_0, k-quants Q2_K–Q6_K, IQ4_NL |
 | **Inference model** | `model.go` | Transformer forward pass, KV cache, autoregressive generation |
+| **Encoder embeddings** | `model_bert.go`, `tokenizer_wordpiece.go` | BERT / nomic-bert bidirectional encoder + WordPiece tokenizer for embedding models (all-MiniLM, BGE, E5, GTE, nomic-embed-text) |
 | **Tokenizer** | `tokenizer.go` | BPE tokenizer with sentencepiece + GPT-2 byte-fallback |
 | **Chat templates** | `chat_template.go` | ChatML/Jinja2 template rendering |
-| **Quantized matmul** | `q8_fast.go`, `q5_fast.go` | Fused quantized dot products (Q4_0, Q4_1, Q5_0, Q8_0) |
+| **Quantized matmul** | `q8q8.go`, `q4q8.go`, `q41q8.go`, `q8_fast.go` | Fused int8-SIMD dot products (Q8_0, Q4_0, Q4_1) — AVX2/AVX-VNNI + NEON |
+| **K-quant acceleration** | `kquant_kernels.go` | Maps Q4_K→Q4_1, Q5_K→2×Q4_1, Q6_K/IQ4_NL→Q8_0 onto the fused kernels |
 | **Quantize/dequantize** | `quantize.go` | Float-to-Q8 conversion, dequant helpers |
 | **Fused ops** | `fused.go`, `fused_ops.go`, `fused_block.go` | Linear layers, RMS norm, RoPE, attention, FFN, output logits |
 | **Primitives** | `llm_primitives.go` | Vector ops, activations, head splitting/merging, repeat KV |
@@ -37,22 +64,83 @@ The library is a single Go package (`scriptlingllmlib`) with these logical group
 
 ## Supported GGUF Tensor Types
 
-| Type | Block Size | Elements/Block | Used For |
-|------|-----------|----------------|----------|
-| F32 | 4 | 1 | Norms, biases |
-| F16 | 2 | 1 | Token embeddings (dequantized) |
-| Q4_0 | 18 | 32 | Weight matrices |
-| Q4_1 | 20 | 32 | Weight matrices (with min offset) |
-| Q5_0 | 22 | 32 | Weight matrices |
-| Q8_0 | 34 | 32 | Weight matrices, token embeddings |
+| Type | Block / Super-block | Elements | Path | Used For |
+|------|-----------|----------|------|----------|
+| F32 | 4 B | 1 | float | Norms, biases |
+| F16 | 2 B | 1 | float | Token embeddings |
+| Q4_0 | 18 B | 32 | packed kernel | Weight matrices |
+| Q4_1 | 20 B | 32 | packed kernel | Weight matrices (with min offset) |
+| Q5_0 | 22 B | 32 | packed kernel | Weight matrices |
+| Q5_1 | 24 B | 32 | dense float | k-quant fallback rows |
+| Q8_0 | 34 B | 32 | packed kernel | Weight matrices, token embeddings |
+| Q2_K | 84 B | 256 | dense float | Weight matrices |
+| Q3_K | 110 B | 256 | dense float | Weight matrices |
+| Q4_K | 144 B | 256 | → Q4_1 kernel | Weight matrices |
+| Q5_K | 176 B | 256 | → 2×Q4_1 kernel | Weight matrices |
+| Q6_K | 210 B | 256 | → Q8_0 kernel | Weight matrices |
+| IQ4_NL | 18 B | 32 | → Q8_0 kernel | i-quant fallback rows |
 
-K-quant types (Q4_K, Q4_K_M, Q6_K, etc.) are not supported. Use `_Q8_0` or `_Q4_0` variants from [bartowski's GGUF collection](https://huggingface.co/bartowski).
+K-quant models (e.g. `Q4_K_M`, `Q5_K_M`, `Q6_K`) load and run correctly.
+
+- **Q4_K is fast by default.** It is re-expressed as `Q4_1` (a lossless per-32 `scale·q4 + min` mapping) and runs on the existing **fused int8 SIMD kernel** (`q41q8`, AVX2 + NEON) — ~6× less memory than dense float and **~3× faster decode** (e.g. 1.7B `Q4_K_M` on an M5 Max: 10.7 → 32 t/s). This kicks in automatically wherever the fast int8 kernel is available; on hosts without it (no AVX2/NEON) Q4_K falls back to dense float32.
+- **Q5_K is fast by default** too. A 5-bit Q5_K value is `q4 + 16·high_bit`, so it splits into two Q4_1 weights (low nibbles + high bit) that are summed — both run on the same fused `q41q8` SIMD kernel. Near-lossless and compact, default on int8-capable hosts (two passes, so a smaller speedup than Q4_K's single pass, but still well above dense).
+- **Q6_K is fast by default** too. It is symmetric (no min) like `Q8_0`, and Q8's 8 bits capture the 6-bit values near-losslessly, so it is requantized to `Q8_0` and runs on the fused `q8q8` SIMD kernel. This matters beyond pure Q6_K models — Q6_K is ~20% of `Q4_K_M` / `Q5_K_M` (the `ffn_down` and `output` tensors), so it speeds those up too. Default on int8-capable hosts; dense float elsewhere.
+- **IQ4_NL** is supported too (some k-quant repacks of small models use it for rows whose width isn't a multiple of 256). Its values are a fixed non-linear int8 codebook, so it requantizes losslessly to `Q8_0` and runs on the `q8q8` kernel. Other IQ-family *i-quants* (`IQ2_*`, `IQ3_*`, `IQ4_XS`, …) are not yet implemented and are rejected with a clear error rather than loading silently corrupted weights.
+
+For the fastest path, prefer `_Q8_0` or `_Q4_0` variants from [bartowski's GGUF collection](https://huggingface.co/bartowski).
 
 ## Go API
 
-For embedding this library in other Go programs (without the Scriptling runtime), two exported functions are provided in `generate_cached.go`.
+For embedding this library in other Go programs (without the Scriptling runtime), the package exposes a cached, concurrency-safe generation API. Everything uses the same thread-safe global model+session cache that the Scriptling `llm.generate` built-in uses — so models are loaded once and reused across calls.
 
-They use the same thread-safe global model+session cache that the Scriptling `llm.generate` built-in uses — so models are loaded once and reused across calls.
+### `Generate` (recommended)
+
+The ergonomic entry point takes an options struct (only `Model` and `Prompt` are required; zero fields use sensible defaults) and returns a structured result:
+
+```go
+func Generate(opts GenerateOptions) (GenerateResult, error)
+
+type GenerateOptions struct {
+    Model, Prompt string          // required
+    MaxTokens     int             // default 256
+    Strategy      string          // StrategyGreedy (default) | StrategyTemperature | StrategyTopK | StrategyTopP
+    Temperature   float64         // default 1.0 (non-greedy only)
+    TopK          int             // default 40
+    TopP          float64         // default 0.95
+    RepeatPenalty float64         // default 1.1 (1.0 disables)
+    RepeatLastN   int             // default 64
+    System        string          // system prompt
+    Template      string          // chat template override, e.g. "chatml"
+    Session       string          // persist KV cache under this id; "" disables
+    Context       context.Context // cancellation; nil => no cancellation
+    OnToken       func(delta string) // stream deltas; nil => no streaming
+}
+
+type GenerateResult struct {
+    Text            string
+    GeneratedTokens int
+    PromptTokens    int
+    PrefillMs       float64
+    DecodeMs        float64
+}
+```
+
+```go
+res, err := scriptlingllmlib.Generate(scriptlingllmlib.GenerateOptions{
+    Model:   "model.gguf",
+    Prompt:  "Hello!",
+    Session: "chat1",
+    OnToken: func(d string) { fmt.Print(d) }, // optional streaming
+})
+if err != nil { log.Fatal(err) }
+fmt.Printf("\n(%.1f t/s)\n", float64(res.GeneratedTokens)/(res.DecodeMs/1000))
+```
+
+`Generate` is safe to call from multiple goroutines at once. The model weights are loaded once and shared read-only; each call runs on its own clone of the mutable inference state (KV cache and scratch buffers), so concurrent requests cannot corrupt one another. Turns of the *same* `Session` are serialized (a session is a single conversation). A single in-flight request fans out across all cores; when several requests are in flight, each runs serially and the cores are shared between them — so throughput scales with load without oversubscribing the CPU. If `Context` is cancelled, the error is `ctx.Err()` and `Text` holds the partial output.
+
+### Positional functions
+
+`GenerateWithCache`, `GenerateWithCacheContext`, and `GenerateWithCacheStream` are lower-level variants with positional parameters; `Generate` is built on top of them and is preferred for new code.
 
 ### `GenerateWithCache`
 
@@ -75,12 +163,56 @@ func GenerateWithCache(
 
 Runs inference with the global model cache. If `sessionID` is non-empty the KV cache is persisted between calls, enabling multi-turn conversations without reprocessing prior context.
 
+**Concurrency:** `GenerateWithCache` is safe to call from multiple goroutines at once. The model weights are loaded once and shared read-only; each call runs on its own clone of the mutable inference state (KV cache and scratch buffers), so concurrent requests cannot corrupt one another. Turns of the *same* `sessionID` are serialized (a session is a single conversation). A single in-flight request fans out across all cores; when several requests are in flight, each runs serially and the cores are shared between them — so throughput scales with load without oversubscribing the CPU.
+
 Return values:
 - `text` — generated text
 - `generatedTokens` — number of tokens produced
 - `promptTokens` — number of tokens in the prompt
 - `prefillMs` — time spent processing the prompt (milliseconds)
 - `decodeMs` — time spent generating tokens (milliseconds)
+
+### `GenerateWithCacheContext`
+
+```go
+func GenerateWithCacheContext(
+    ctx context.Context,
+    // ...same parameters as GenerateWithCache...
+) (text string, generatedTokens int, promptTokens int, prefillMs float64, decodeMs float64, err error)
+```
+
+Same as `GenerateWithCache` but cancellable. When `ctx` is cancelled (client disconnect, deadline) the decode loop stops between tokens and returns the **partial text generated so far** along with `ctx.Err()` (`context.Canceled` or `context.DeadlineExceeded`). Prefill is not interruptible, so cancellation takes effect once decoding begins. `GenerateWithCache` is just this function with `context.Background()`.
+
+```go
+ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+defer cancel()
+text, _, _, _, _, err := scriptlingllmlib.GenerateWithCacheContext(
+    ctx, "model.gguf", prompt, 512, "greedy", 1.0, 50, 0.9, 1.15, 64, "", "", sessionID,
+)
+// err == context.Canceled if the client went away; text holds the partial output.
+```
+
+### `GenerateWithCacheStream`
+
+```go
+func GenerateWithCacheStream(
+    ctx context.Context,
+    // ...same parameters as GenerateWithCache...
+    onToken func(delta string),
+) (text string, generatedTokens int, promptTokens int, prefillMs float64, decodeMs float64, err error)
+```
+
+Streams output as it is generated. If `onToken` is non-nil it is called with each decoded text **delta** as tokens are produced; the complete `text` is still returned at the end. Byte-level tokens are buffered internally so every delta is valid UTF-8 (a multi-byte rune split across tokens is held back until complete). `onToken` runs on the calling goroutine inside the decode loop — keep it fast and do not call back into the same model from it. `ctx` cancels exactly as in `GenerateWithCacheContext`.
+
+```go
+_, _, _, _, _, err := scriptlingllmlib.GenerateWithCacheStream(
+    ctx, "model.gguf", prompt, 512, "greedy", 1.0, 50, 0.9, 1.15, 64, "", "", sessionID,
+    func(delta string) {
+        fmt.Fprint(w, delta) // e.g. write a server-sent-events chunk
+        flusher.Flush()
+    },
+)
+```
 
 ### `ClearSessionWithCache`
 
@@ -89,6 +221,56 @@ func ClearSessionWithCache(modelPath string, sessionID string)
 ```
 
 Evicts the KV cache for the given `(modelPath, sessionID)` pair. Call this when a conversation is finished to free memory.
+
+### `Embed`
+
+```go
+func Embed(opts EmbedOptions) ([]float32, error)
+
+type EmbedOptions struct {
+    Model, Text string // required
+    Pooling     string // PoolingMean (default) | PoolingLast
+    Normalize   bool   // L2-normalize the result (recommended for cosine similarity)
+}
+```
+
+Computes a dense embedding of `Text`, returning a vector the length of the model's embedding dimension. Uses the same thread-safe cache as `Generate`. Pass `Normalize: true` for unit-length vectors suited to cosine similarity.
+
+Two kinds of model work:
+
+- **Dedicated encoder embedding models** (`all-MiniLM-L6-v2`, `bge-*`, `e5-*`, `gte-*` — GGUF `bert`; and `nomic-embed-text` — GGUF `nomic-bert`, which adds RoPE, a fused QKV matrix, and a gated SwiGLU FFN). These are bidirectional encoders with their own WordPiece tokenizer and mean/CLS pooling; `Embed` runs the full encoder and pools. This is what you want for retrieval/similarity. (Outputs match `llama-embedding` at cosine ≥ 0.996. `nomic-embed-text` expects a `search_query: ` / `search_document: ` prefix on the input.)
+- **Decoder LLMs** (the same Llama/Qwen models `Generate` uses, plus decoder embedders like `e5-mistral`). `Embed` pools their final hidden states; `Pooling: "last"` (last-token) is usually best for these.
+
+`Embed` picks the right path automatically from the model's architecture.
+
+```go
+a, _ := scriptlingllmlib.Embed(scriptlingllmlib.EmbedOptions{Model: "model.gguf", Text: "the cat sat on the mat", Normalize: true})
+b, _ := scriptlingllmlib.Embed(scriptlingllmlib.EmbedOptions{Model: "model.gguf", Text: "a cat was sitting on the rug", Normalize: true})
+// cosine(a, b) is high for paraphrases, low for unrelated text.
+```
+
+### `EmbedBatch`
+
+```go
+func EmbedBatch(opts EmbedBatchOptions) ([][]float32, error)
+
+type EmbedBatchOptions struct {
+    Model     string   // required
+    Texts     []string // required
+    Pooling   string   // PoolingMean (default) | PoolingLast
+    Normalize bool
+}
+```
+
+Embeds many texts at once, returning one vector per text in input order. For encoder models the whole batch is encoded in **one packed forward pass** (block-diagonal attention keeps sequences from attending across each other), so every weight matrix is read from memory once for the batch instead of once per text. This is the throughput path for embedding a corpus — much faster than calling `Embed` in a loop, with the gain growing with model size (it's dominated by weight-memory traffic). Results are identical to `Embed` per text. Decoder models fall back to per-text embedding.
+
+```go
+vecs, _ := scriptlingllmlib.EmbedBatch(scriptlingllmlib.EmbedBatchOptions{
+    Model: "nomic-embed-text-v1.5.Q8_0.gguf",
+    Texts: []string{"search_document: ...", "search_document: ...", /* ... */},
+    Normalize: true,
+})
+```
 
 ### Example
 
@@ -116,6 +298,8 @@ All functions below are available via `import llm` in Scriptling scripts.
 ### Text Generation
 
 - `llm.generate(model, prompt, max_tokens, strategy, ...)` — End-to-end generation from GGUF files. Supports `temperature`, `top_k`, `top_p`, `repeat_penalty`, `system_prompt`, `template`, `stats`, `session` kwargs.
+- `llm.embed(model, text, pooling="mean", normalize=false)` — Dense embedding vector (list of floats) from the model's final hidden states.
+- `llm.embed_batch(model, texts, pooling="mean", normalize=false)` — Embed a list of texts in one pass; returns a 2D array `[len(texts)][dim]`. For encoder models the batch is encoded in a single forward pass (much faster than calling `embed` in a loop).
 - `llm.clear_session(model, session_id)` — Clear a cached session's KV cache.
 
 ### Linear Algebra
@@ -187,7 +371,9 @@ Models are saved to `models/`. Remove them with `task models:clean`.
 ```bash
 task build:examples          # native platform
 task build:examples:linux    # linux/amd64 + linux/arm64
+task build:examples:darwin   # darwin/amd64 + darwin/arm64
 task build:examples:windows  # windows/amd64 + windows/arm64
+task build:dist              # all of the above
 ```
 
 Binaries land in `bin/`.
@@ -238,10 +424,56 @@ go run ./examples/basic/
 
 ```bash
 task test              # unit tests
-task smoke             # end-to-end generation against all downloaded models
+task smoke             # scans models/ and smoke-tests each .gguf (generation, or
+                       # embedding for encoder models); SMOKE_MODELS_DIR overrides
 ```
 
-See [BENCHMARKS.md](BENCHMARKS.md) for measured decode/prefill throughput across platforms.
+Accuracy is guarded by perplexity regression tests (`accuracy_test.go`): they compute the model's perplexity over a fixed passage and assert it stays within a golden band, and that the Q8 model is no less accurate than Q4. These catch silent corruption from changes to the hand-tuned quantized kernels. They run as part of `task test` when the SmolLM2-135M models are present, and skip otherwise.
+
+The GGUF parser treats its input as untrusted — every read is bounds-checked and every length/count is capped against the file size — and is covered by a fuzz target:
+
+```bash
+go test -run='^$' -fuzz='^FuzzParseGGUF$' -fuzztime=60s .   # explore for parser crashes
+```
+
+CI (`.github/workflows/ci.yml`) runs vet, build, the race-enabled test suite (model-dependent tests skip without models), a short fuzz smoke run, and a cross-compile matrix (darwin/arm64, linux/arm64, linux/amd64, windows/amd64) on every push and pull request.
+
+See [BENCHMARKS.md](BENCHMARKS.md) for measured decode/prefill throughput across platforms, and [bench/](bench/README.md) for `fleet.sh` — a harness that cross-compiles `infer`, pushes it plus the selected models to a fleet of remote hosts, and collects benchmarks/CPU profiles in one command.
+
+## Performance tuning
+
+The library auto-tunes itself to the host CPU at startup; in most cases nothing needs configuring.
+
+**Quantized matmul kernel.** Init micro-benchmarks the available Q8 kernels and uses the fastest for this machine:
+
+- *Float SIMD* (AVX2/F16C/SSE, or NEON on ARM) — int8 weights × float32 activations. Fast on most hardware.
+- *Scalar Go* — fallback for hosts where float SIMD is penalized (some VMs force AVX2/F16C down a slow path, where scalar wins by a wide margin).
+- *Q8×Q8* — quantizes activations to int8 so the hot loop is pure-integer SIMD (`VPMADDWD`). On hosts where the *float* SIMD path is penalized but the *integer* pipeline is not (e.g. an AMD Ryzen 7 4700U VM), this is ~3.6× faster than scalar at the kernel level and roughly doubles decode throughput. Costs ~1% activation-quantization error (negligible for inference).
+- *Q4×Q8* — Q4_0 has no float SIMD kernel, so a fused AVX2 kernel decodes the 4-bit weights in SIMD and dots them against int8 activations in one pass — ~10× the old scalar Q4 path at the kernel level. Q4_0 halves weight bandwidth vs Q8_0, which matters for larger models that are memory-bound.
+
+The selector picks whichever actually wins on the host, so no configuration is needed. To override it, set `SLLM_Q8_KERNEL=int8` (force the integer-activation path), `=float` (force full-precision activations — use if the ~1% activation-quantization error matters), or leave it unset to auto-select.
+
+**K-quant fast paths.** `Q4_K`, `Q5_K`, `Q6_K`, and `IQ4_NL` are mapped onto the fused int8 kernels above (Q4_K→Q4_1, Q5_K→2×Q4_1, Q6_K/IQ4_NL→Q8_0) and accelerated automatically wherever the int8 kernel is available — no flag needed (see [Supported GGUF Tensor Types](#supported-gguf-tensor-types)). On hosts without the int8 kernel they fall back to dense float32. For RAM-limited hosts, `SLLM_KQUANT_PACKED=1` keeps `Q5_K`/`Q6_K` in a scalar packed form (~4–6× less memory than dense float, at lower speed) so larger k-quant models still fit.
+
+**Parallelism threshold** — `SLLM_PARALLEL_THRESHOLD` (env var, integer). Loops with fewer than this many items run serially instead of being split across worker goroutines. Fork/join has real cost (goroutine wakeup + sync), so on hosts where it is expensive, splitting the small per-token decode matmuls is a net loss. At startup the library measures whether splitting a decode-sized matmul actually beats running it serially and picks `256` (parallelize aggressively — bare metal, Apple silicon) or `8192` (keep small matmuls serial, parallelize only the large prefill/output projections — hosts with expensive fork/join, e.g. some VMs). This is measured directly and is independent of the kernel choice, so a bare-metal box that prefers the int8 kernel still parallelizes aggressively.
+
+```bash
+# Parallelize aggressively (fast bare metal with cheap goroutine wakeup)
+SLLM_PARALLEL_THRESHOLD=256 ./bin/infer -model model.gguf -prompt "..."
+
+# Force fully serial decode (hosts where fork/join is very expensive)
+SLLM_PARALLEL_THRESHOLD=999999999 ./bin/infer -model model.gguf -prompt "..."
+```
+
+Worker count follows `runtime.NumCPU()`, capped at 8.
+
+**Memory-mapped loading.** On Linux and macOS the model file is loaded with a read-only `mmap` instead of being read fully into the heap. The weights are still copied into the model's own buffers during build, but the file image itself is file-backed (clean, reclaimable, shareable across processes) rather than a dirty heap allocation — roughly halving peak resident memory during load and avoiding a full-file copy. The mapping is unmapped as soon as the build finishes. Other platforms (e.g. Windows) transparently fall back to a full read.
+
+**Async preemption** — `GODEBUG=asyncpreemptoff=1` (Go runtime flag). Inference spends most of its time in tight compute loops; on hosts where delivering preemption signals is expensive (notably some VMs), Go's async preemption can add meaningful overhead — measured ~16% of decode CPU on an AMD Ryzen 7 4700U VM, worth ~5–10% throughput to disable. This is a global runtime tradeoff (it can delay GC and goroutine scheduling), so it is opt-in via the environment rather than a default:
+
+```bash
+GODEBUG=asyncpreemptoff=1 ./bin/infer -model model.gguf -prompt "..."
+```
 
 ## Sessions
 

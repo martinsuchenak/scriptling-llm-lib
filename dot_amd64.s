@@ -72,23 +72,26 @@ f16_done:
 	MOVL SI, X0                   // f32 bits → XMM0 (SSE2 MOVD, no stack touch)
 
 	// --- Sign-extend 32 int8 → int32, convert to float32 ---
-	VPMOVSXBD  2(AX), X1
-	VPMOVSXBD  6(AX), X2
-	VPMOVSXBD 10(AX), X3
-	VPMOVSXBD 14(AX), X4
-	VPMOVSXBD 18(AX), X8
-	VPMOVSXBD 22(AX), X9
-	VPMOVSXBD 26(AX), X10
-	VPMOVSXBD 30(AX), X11
+	// Legacy (non-VEX) SSE4.1/SSE2 encodings on purpose: this kernel is the
+	// fallback for CPUs without AVX (e.g. Westmere Xeons like the X5675). The
+	// VEX-encoded VPMOVSXBD/VCVTDQ2PS would fault with SIGILL there.
+	PMOVSXBD  2(AX), X1
+	PMOVSXBD  6(AX), X2
+	PMOVSXBD 10(AX), X3
+	PMOVSXBD 14(AX), X4
+	PMOVSXBD 18(AX), X8
+	PMOVSXBD 22(AX), X9
+	PMOVSXBD 26(AX), X10
+	PMOVSXBD 30(AX), X11
 
-	VCVTDQ2PS X1, X1
-	VCVTDQ2PS X2, X2
-	VCVTDQ2PS X3, X3
-	VCVTDQ2PS X4, X4
-	VCVTDQ2PS X8, X8
-	VCVTDQ2PS X9, X9
-	VCVTDQ2PS X10, X10
-	VCVTDQ2PS X11, X11
+	CVTPL2PS X1, X1   // CVTDQ2PS (Go uses Plan9 "packed long → packed single")
+	CVTPL2PS X2, X2
+	CVTPL2PS X3, X3
+	CVTPL2PS X4, X4
+	CVTPL2PS X8, X8
+	CVTPL2PS X9, X9
+	CVTPL2PS X10, X10
+	CVTPL2PS X11, X11
 
 	// q[i] * x[i] for all 32 pairs
 	MOVUPS   (BX), X5
@@ -129,10 +132,27 @@ f16_done:
 	JMP loop
 
 done:
-	// Zero upper YMM state before returning to prevent AVX→SSE transition
-	// penalties in any caller that uses legacy SSE after this function.
-	VZEROUPPER
+	// No VZEROUPPER: this kernel uses only legacy SSE encodings (no VEX), so it
+	// never dirties the upper YMM state — and VZEROUPPER is itself an AVX
+	// instruction that would fault on the no-AVX CPUs this path targets.
 	MOVSS X7, ret+24(FP)
+	RET
+
+
+// func cpuHasSSE41() bool
+//
+// Returns true when CPUID leaf 1 reports SSE4.1 (ECX bit 19). The SSE fallback
+// kernel uses PMOVSXBD (SSE4.1); CPUs without it must use the scalar kernel.
+TEXT ·cpuHasSSE41(SB), NOSPLIT, $0-1
+	MOVL $1, AX
+	CPUID
+	ANDL  $0x00080000, CX         // bit 19 = SSE4.1
+	MOVL  $0, AX
+	CMPL  CX, $0x00080000
+	JNE   no_sse41
+	MOVL  $1, AX
+no_sse41:
+	MOVB  AX, ret+0(FP)
 	RET
 
 

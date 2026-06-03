@@ -35,3 +35,6 @@ Thumbs.db
 /models/
 ./sllm
 
+bench/bin/
+bench/*.prof
+bench/hosts.conf

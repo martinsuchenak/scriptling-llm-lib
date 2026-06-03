@@ -5,9 +5,16 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"runtime"
 )
 
 const ggufMagic = 0x46554747
+
+// kquantPacked enables the native packed Q4_K/Q5_K/Q6_K kernels instead of
+// dequantizing to dense float32. Opt-in (SLLM_KQUANT_PACKED) until the packed
+// SIMD kernels make it the faster default; today it trades speed for ~4-6x less
+// memory, which is what lets large k-quant models fit on RAM-limited hosts.
+var kquantPacked = os.Getenv("SLLM_KQUANT_PACKED") != ""
 
 var ggufTypeSizes = map[int]int{
 	0: 4,
@@ -37,6 +44,7 @@ type GGUFModel struct {
 	File       *os.File
 	DataOffset int64
 	fileData   []byte
+	unmap      func() error // non-nil when fileData is a memory map
 }
 
 type ModelConfig struct {
@@ -73,13 +81,29 @@ type QuantWeight struct {
 type ggufReader struct {
 	data []byte
 	pos  int
+	bad  bool // set once any read runs past the end of data
 }
 
 func newGGUFReader(data []byte) *ggufReader {
 	return &ggufReader{data: data}
 }
 
+// ensure reports whether n more bytes are available at the cursor. Once a read
+// has gone out of bounds the reader is "bad" and every subsequent read is a
+// no-op returning a zero value, so callers can parse optimistically and check
+// r.bad once at the end instead of after every read.
+func (r *ggufReader) ensure(n int) bool {
+	if r.bad || n < 0 || r.pos+n > len(r.data) {
+		r.bad = true
+		return false
+	}
+	return true
+}
+
 func (r *ggufReader) readUint8() uint8 {
+	if !r.ensure(1) {
+		return 0
+	}
 	v := r.data[r.pos]
 	r.pos++
 	return v
@@ -90,6 +114,9 @@ func (r *ggufReader) readInt8() int8 {
 }
 
 func (r *ggufReader) readUint16() uint16 {
+	if !r.ensure(2) {
+		return 0
+	}
 	v := binary.LittleEndian.Uint16(r.data[r.pos:])
 	r.pos += 2
 	return v
@@ -100,6 +127,9 @@ func (r *ggufReader) readInt16() int16 {
 }
 
 func (r *ggufReader) readUint32() uint32 {
+	if !r.ensure(4) {
+		return 0
+	}
 	v := binary.LittleEndian.Uint32(r.data[r.pos:])
 	r.pos += 4
 	return v
@@ -110,6 +140,9 @@ func (r *ggufReader) readInt32() int32 {
 }
 
 func (r *ggufReader) readUint64() uint64 {
+	if !r.ensure(8) {
+		return 0
+	}
 	v := binary.LittleEndian.Uint64(r.data[r.pos:])
 	r.pos += 8
 	return v
@@ -120,12 +153,18 @@ func (r *ggufReader) readInt64() int64 {
 }
 
 func (r *ggufReader) readFloat32() float32 {
+	if !r.ensure(4) {
+		return 0
+	}
 	v := binary.LittleEndian.Uint32(r.data[r.pos:])
 	r.pos += 4
 	return math.Float32frombits(v)
 }
 
 func (r *ggufReader) readFloat64() float64 {
+	if !r.ensure(8) {
+		return 0
+	}
 	v := binary.LittleEndian.Uint64(r.data[r.pos:])
 	r.pos += 8
 	return math.Float64frombits(v)
@@ -133,11 +172,21 @@ func (r *ggufReader) readFloat64() float64 {
 
 func (r *ggufReader) readString() string {
 	length := r.readUint64()
-	if length == 0 {
+	if r.bad || length == 0 {
 		return ""
 	}
-	s := string(r.data[r.pos : r.pos+int(length)])
-	r.pos += int(length)
+	// A string can be no longer than the whole file; this also guards the
+	// uint64->int conversion against overflow on a hostile length.
+	if length > uint64(len(r.data)) {
+		r.bad = true
+		return ""
+	}
+	n := int(length)
+	if !r.ensure(n) {
+		return ""
+	}
+	s := string(r.data[r.pos : r.pos+n])
+	r.pos += n
 	return s
 }
 
@@ -170,12 +219,34 @@ func (r *ggufReader) readValue(vtype uint32) interface{} {
 	case 9:
 		arrType := r.readUint32()
 		arrLen := r.readUint64()
-		result := make([]interface{}, arrLen)
+		if r.bad {
+			return nil
+		}
+		// Each element is at least one byte, so an array can't have more
+		// elements than the file has bytes. Cap the prealloc so a hostile
+		// length can't force a giant up-front allocation; the slice still
+		// grows to fit a genuine (bounded) array via append.
+		if arrLen > uint64(len(r.data)) {
+			r.bad = true
+			return nil
+		}
+		capHint := arrLen
+		if capHint > 4096 {
+			capHint = 4096
+		}
+		result := make([]interface{}, 0, capHint)
 		for i := uint64(0); i < arrLen; i++ {
-			result[i] = r.readValue(arrType)
+			v := r.readValue(arrType)
+			if r.bad {
+				return nil
+			}
+			result = append(result, v)
 		}
 		return result
 	default:
+		// Unknown value type: we can't know its width, so fail rather than
+		// desync the cursor.
+		r.bad = true
 		return nil
 	}
 }
@@ -419,11 +490,38 @@ func dequantizeQ5_0Native(data []byte, offset int, nElements int) []float64 {
 }
 
 func LoadGGUF(path string) (*GGUFModel, error) {
-	fileData, err := os.ReadFile(path)
+	// Prefer a read-only memory map (cheap, file-backed); fall back to a full
+	// read where mmap is unavailable (e.g. Windows) or fails.
+	fileData, unmap, err := mmapFile(path)
 	if err != nil {
-		return nil, fmt.Errorf("gguf: failed to read file: %w", err)
+		fileData, err = os.ReadFile(path)
+		if err != nil {
+			return nil, fmt.Errorf("gguf: failed to read file: %w", err)
+		}
+		unmap = nil
 	}
 
+	g, perr := parseGGUF(fileData)
+	if perr != nil {
+		if unmap != nil {
+			_ = unmap()
+		}
+		return nil, perr
+	}
+
+	if unmap != nil {
+		g.unmap = unmap
+		// Safety net: unmap if the caller forgets ReleaseFileData.
+		runtime.SetFinalizer(g, (*GGUFModel).ReleaseFileData)
+	}
+	return g, nil
+}
+
+// parseGGUF parses an in-memory GGUF image. It treats the bytes as untrusted:
+// every read is bounds-checked and every attacker-controlled count/length is
+// capped against the image size, so malformed input yields an error, never a
+// panic or unbounded allocation.
+func parseGGUF(fileData []byte) (*GGUFModel, error) {
 	r := newGGUFReader(fileData)
 
 	magic := r.readUint32()
@@ -435,31 +533,47 @@ func LoadGGUF(path string) (*GGUFModel, error) {
 	nTensors := r.readUint64()
 	nMetadata := r.readUint64()
 
-	metadata := make(map[string]interface{}, nMetadata)
+	// Each metadata entry and tensor descriptor occupies several bytes, so the
+	// file can't contain more of them than it has bytes. This caps the counts
+	// (which are attacker-controlled) before they drive any allocation.
+	if r.bad || nTensors > uint64(len(fileData)) || nMetadata > uint64(len(fileData)) {
+		return nil, fmt.Errorf("gguf: malformed header (tensors=%d, metadata=%d)", nTensors, nMetadata)
+	}
+
+	metadata := make(map[string]interface{}, 0)
 	for i := uint64(0); i < nMetadata; i++ {
 		key := r.readString()
 		vtype := r.readUint32()
 		val := r.readValue(vtype)
+		if r.bad {
+			return nil, fmt.Errorf("gguf: truncated or malformed metadata")
+		}
 		metadata[key] = val
 	}
 
-	tensorInfos := make([]*tensorInfo, nTensors)
+	tensorInfos := make([]*tensorInfo, 0, nTensors)
 	for i := uint64(0); i < nTensors; i++ {
 		name := r.readString()
 		nDims := r.readUint32()
+		if r.bad || uint64(nDims) > uint64(len(fileData)) {
+			return nil, fmt.Errorf("gguf: truncated or malformed tensor info")
+		}
 		dims := make([]uint64, nDims)
 		for d := uint32(0); d < nDims; d++ {
 			dims[d] = r.readUint64()
 		}
 		ggufType := r.readUint32()
 		tOffset := r.readUint64()
+		if r.bad {
+			return nil, fmt.Errorf("gguf: truncated or malformed tensor info")
+		}
 		mapped := mapTensorName(name)
-		tensorInfos[i] = &tensorInfo{
+		tensorInfos = append(tensorInfos, &tensorInfo{
 			Name:   mapped,
 			Dims:   dims,
 			Type:   ggufType,
 			Offset: tOffset,
-		}
+		})
 	}
 
 	alignment := uint64(metaInt(metadata, "general.alignment", 32))
@@ -569,7 +683,15 @@ func LoadGGUF(path string) (*GGUFModel, error) {
 	return gguf, nil
 }
 
+// ReleaseFileData frees the file image. If it was memory-mapped the mapping is
+// unmapped; otherwise the byte slice is simply dropped for the GC. Safe to call
+// more than once. After this, LoadTensor re-reads the file on demand.
 func (g *GGUFModel) ReleaseFileData() {
+	if g.unmap != nil {
+		_ = g.unmap()
+		g.unmap = nil
+		runtime.SetFinalizer(g, nil)
+	}
 	g.fileData = nil
 }
 
@@ -647,6 +769,9 @@ func (g *GGUFModel) loadTensor1DF32(name string) ([]float32, error) {
 		}
 		return result, nil
 	default:
+		if !tensorTypeSupported(ti.Type) {
+			return nil, fmt.Errorf("gguf: tensor %q has unsupported type %d", name, ti.Type)
+		}
 		f64 := g.dequantize1D(fileData, ti, nElements)
 		return f64ToF32(f64), nil
 	}
@@ -682,6 +807,9 @@ func (g *GGUFModel) loadTensor2DF32(name string) ([]float32, int, int, error) {
 		}
 		return result, rows, cols, nil
 	default:
+		if !tensorTypeSupported(ti.Type) {
+			return nil, 0, 0, fmt.Errorf("gguf: tensor %q has unsupported type %d", name, ti.Type)
+		}
 		f64 := g.dequantize1D(fileData, ti, nElements)
 		return f64ToF32(f64), rows, cols, nil
 	}
@@ -737,8 +865,67 @@ func (g *GGUFModel) loadWeightF32Direct(name string) (interface{}, error) {
 		raw := make([]byte, totalBytes)
 		copy(raw, fileData[offset:offset+totalBytes])
 		return &QuantWeight{QType: "q5", Raw: raw, Groups: groupsPerRow, Rows: rows, Cols: cols}, nil
+	case 12, 13, 14:
+		// Q4_K maps losslessly onto Q4_1 (both per-32 scale*q4+min), so convert and
+		// reuse the fused q41q8 SIMD kernel. Default ON wherever that fast kernel is
+		// available (AVX2/NEON) — it's faster, near-lossless, and ~6x less memory
+		// than dense float (3x decode on an M5 Max). Also honoured under
+		// SLLM_KQUANT_PACKED on hosts without the fast kernel (memory win, scalar
+		// q4_1 dot). Elsewhere Q4_K falls through to dense float.
+		if ti.Type == 12 && cols%256 == 0 && (useInt8Q41 || kquantPacked) {
+			raw := convertQ4KToQ41(fileData, offset, rows, cols)
+			return &QuantWeight{QType: "q4_1", Raw: raw, Groups: cols / 32, Rows: rows, Cols: cols}, nil
+		}
+		// Q5_K = Q5_1 = two summed Q4_1 weights (low nibbles + high bit), so it
+		// runs on the fast q41q8 kernel twice. Only when that kernel is available.
+		if ti.Type == 13 && cols%256 == 0 && useInt8Q41 {
+			raw := convertQ5KToTwoQ41(fileData, offset, rows, cols)
+			return &QuantWeight{QType: "q5k1", Raw: raw, Groups: cols / 32, Rows: rows, Cols: cols}, nil
+		}
+		// Q6_K is symmetric (no min), like Q8_0 — and Q8's 8 bits capture the
+		// 6-bit values near-losslessly. Requantize to Q8_0 to run on the fast
+		// q8q8 kernel. Q6_K is ~20% of Q4_K_M / Q5_K_M (ffn_down, output), so this
+		// matters for those models too, not just pure Q6_K.
+		if ti.Type == 14 && cols%32 == 0 && useInt8Q8 {
+			flat := g.dequantize1D(fileData, ti, nElements)
+			if qw := quantizeQ8Rows(reshape2D(flat, rows, cols)); qw != nil {
+				return qw, nil
+			}
+		}
+		if kquantPacked && cols%256 == 0 {
+			// Q5_K/Q6_K have no fast kernel yet — scalar packed path (memory only).
+			qt, blockBytes := "q5k", q5kBlockBytes
+			if ti.Type == 14 {
+				qt, blockBytes = "q6k", q6kBlockBytes
+			}
+			nSB := nElements / 256
+			totalBytes := nSB * blockBytes
+			rawW := make([]byte, totalBytes)
+			copy(rawW, fileData[offset:offset+totalBytes])
+			return &QuantWeight{QType: qt, Raw: rawW, Groups: cols / 256, Rows: rows, Cols: cols}, nil
+		}
+		fallthrough
+	case 7, 10, 11:
+		// Q5_1 fallback and Q2_K/Q3_K (no packed kernel yet): dense float32.
+		flat := g.dequantize1D(fileData, ti, nElements)
+		return f64ToF32(flat), nil
+	case 20:
+		// IQ4_NL: codebook values are already int8, so requantizing to Q8_0 is
+		// near-lossless and runs on the fast q8q8 kernel. Blocks are 32 elements
+		// (cols always divisible by 32 for this type).
+		if cols%32 == 0 && useInt8Q8 {
+			flat := g.dequantize1D(fileData, ti, nElements)
+			if qw := quantizeQ8Rows(reshape2D(flat, rows, cols)); qw != nil {
+				return qw, nil
+			}
+		}
+		flat := g.dequantize1D(fileData, ti, nElements)
+		return f64ToF32(flat), nil
 	}
 
+	if !tensorTypeSupported(ti.Type) {
+		return nil, fmt.Errorf("gguf: tensor %q has unsupported type %d", name, ti.Type)
+	}
 	f32, _, _, err := g.loadTensor2DF32(name)
 	if err != nil {
 		return nil, err
@@ -759,12 +946,34 @@ func (g *GGUFModel) dequantize1D(fileData []byte, ti *tensorInfo, nElements int)
 		return dequantizeQ4_1Native(fileData, offset, nElements)
 	case 6:
 		return dequantizeQ5_0Native(fileData, offset, nElements)
+	case 7:
+		return dequantizeQ5_1Native(fileData, offset, nElements)
 	case 8:
 		return dequantizeQ8_0Native(fileData, offset, nElements)
+	case 10:
+		return dequantizeQ2KNative(fileData, offset, nElements)
+	case 11:
+		return dequantizeQ3KNative(fileData, offset, nElements)
+	case 12:
+		return dequantizeQ4KNative(fileData, offset, nElements)
+	case 13:
+		return dequantizeQ5KNative(fileData, offset, nElements)
 	case 14:
 		return dequantizeQ6KNative(fileData, offset, nElements)
+	case 20:
+		return dequantizeIQ4NLNative(fileData, offset, nElements)
 	}
 	return make([]float64, nElements)
+}
+
+// tensorTypeSupported reports whether a GGUF tensor data type can be decoded.
+// Used to fail loudly on unknown quantizations instead of silently loading zeros.
+func tensorTypeSupported(t uint32) bool {
+	switch t {
+	case 0, 1, 2, 3, 6, 7, 8, 10, 11, 12, 13, 14, 20:
+		return true
+	}
+	return false
 }
 
 func dequantizeQ6KNative(data []byte, offset int, nElements int) []float64 {
@@ -902,13 +1111,15 @@ func quantizeQ8Rows(matrix [][]float64) *QuantWeight {
 			raw = append(raw, scaleBytes...)
 			invScale := 1.0 / scale
 			for i := 0; i < 32; i++ {
-				q := int8(row[base+i] * invScale)
-				if row[base+i]*invScale > 127 {
-					q = 127
-				} else if row[base+i]*invScale < -128 {
-					q = -128
+				val := row[base+i] * invScale
+				if val > 127 {
+					val = 127
+				} else if val < -128 {
+					val = -128
 				}
-				raw = append(raw, byte(q))
+				// Round to nearest (matching ggml). Truncating toward zero would
+				// systematically shrink every weight, biasing the logits.
+				raw = append(raw, byte(int8(math.Round(val))))
 			}
 		}
 	}
@@ -954,13 +1165,13 @@ func quantizeQ8RowsF32(flat []float32, rows, cols int) *QuantWeight {
 			raw = append(raw, scaleBytes[:]...)
 			invScale := float32(1.0) / scale
 			for i := 0; i < 32; i++ {
-				q := int8(flat[base+i] * invScale)
-				if flat[base+i]*invScale > 127 {
-					q = 127
-				} else if flat[base+i]*invScale < -128 {
-					q = -128
+				val := float64(flat[base+i] * invScale)
+				if val > 127 {
+					val = 127
+				} else if val < -128 {
+					val = -128
 				}
-				raw = append(raw, byte(q))
+				raw = append(raw, byte(int8(math.Round(val))))
 			}
 		}
 	}

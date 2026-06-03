@@ -1,6 +1,6 @@
 // Package scriptlingllmlib provides LLM inference primitives as a Scriptling library.
 //
-// This library exposes 24 native functions under the "llm" namespace, covering
+// This library exposes 51 native functions under the "llm" namespace, covering
 // the core operations needed to implement transformer model inference in Scriptling
 // scripts. All functions are implemented using the Scriptling Native API for
 // zero-reflection overhead on every call.
@@ -49,7 +49,7 @@ const LibraryName = "llm"
 // functions. Register it with a Scriptling interpreter via
 // [scriptling.Scriptling.RegisterLibrary].
 //
-// The library exposes 27 functions and one constant (VERSION).
+// The library exposes 51 functions and one constant (VERSION).
 var Library = object.NewLibrary(LibraryName,
 	map[string]*object.Builtin{
 		"argmax": {
@@ -470,6 +470,39 @@ Keyword args: temperature, top_k, top_p, repeat_penalty, repeat_last_n,
 
 Returns:
   Generated text string.`,
+		},
+		"embed": {
+			Fn: fnEmbed,
+			HelpText: `embed(model_path, text) - Compute a dense embedding vector for text
+
+Parameters:
+  model_path - path to .gguf model file
+  text       - text to embed
+
+Keyword args:
+  pooling   - "mean" (default) or "last"
+  normalize - L2-normalize the vector (default false)
+
+Returns:
+  List of floats (length = model embedding dimension).`,
+		},
+		"embed_batch": {
+			Fn: fnEmbedBatch,
+			HelpText: `embed_batch(model_path, texts) - Embed many texts in one pass
+
+Parameters:
+  model_path - path to .gguf model file
+  texts      - list of strings to embed
+
+Keyword args:
+  pooling   - "mean" (default) or "last"
+  normalize - L2-normalize each vector (default false)
+
+For encoder models the whole batch is encoded in a single forward pass (far
+faster than calling embed in a loop). Results match embed() per text.
+
+Returns:
+  2D float array of shape [len(texts)][embedding dimension].`,
 		},
 	},
 	map[string]object.Object{

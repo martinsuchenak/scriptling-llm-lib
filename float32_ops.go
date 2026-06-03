@@ -1,6 +1,7 @@
 package scriptlingllmlib
 
 import (
+	"context"
 	"encoding/binary"
 	"math"
 	"sync"
@@ -68,6 +69,12 @@ type InferenceModelF32 struct {
 	xDataBuf    []float32
 	PrefillMs   float64
 	DecodeMs    float64
+	// ctx, if set, cancels generation between decode steps. It lives on the
+	// per-request clone, so concurrent requests each carry their own.
+	ctx context.Context
+	// onToken, if set, receives each decoded text delta as it is generated.
+	// Like ctx, it lives on the per-request clone.
+	onToken func(string)
 }
 
 func growSlice(b []float32, n int) []float32 {
@@ -376,6 +383,10 @@ func modelMatmulQuantIntoF32(w *QuantWeight, xData []float32, xRows, xCols int, 
 
 	switch w.QType {
 	case "q8":
+		if useInt8Q8 {
+			q8q8MatmulInto(w, xData, xRows, xCols, result)
+			return result, xRows, outFeatures
+		}
 		groupsPerRow := w.Groups
 		rowBytes := groupsPerRow * 34
 		parallelFor(xRows*outFeatures, func(start, end int) {
@@ -386,6 +397,10 @@ func modelMatmulQuantIntoF32(w *QuantWeight, xData []float32, xRows, xCols int, 
 			}
 		})
 	case "q4":
+		if useInt8Q4 {
+			q4q8MatmulInto(w, xData, xRows, xCols, result)
+			return result, xRows, outFeatures
+		}
 		groupsPerRow := w.Groups
 		rowBytes := groupsPerRow * 18
 		parallelFor(xRows*outFeatures, func(start, end int) {
@@ -396,6 +411,10 @@ func modelMatmulQuantIntoF32(w *QuantWeight, xData []float32, xRows, xCols int, 
 			}
 		})
 	case "q4_1":
+		if useInt8Q41 {
+			q41q8MatmulInto(w, xData, xRows, xCols, result)
+			return result, xRows, outFeatures
+		}
 		groupsPerRow := w.Groups
 		rowBytes := groupsPerRow * 20
 		parallelFor(xRows*outFeatures, func(start, end int) {
@@ -413,6 +432,27 @@ func modelMatmulQuantIntoF32(w *QuantWeight, xData []float32, xRows, xCols int, 
 				xi := idx / outFeatures
 				j := idx % outFeatures
 				result[xi*outFeatures+j] = q5DotRowsF32(rawBytes, j*rowBytes, xData, xi*xCols, groupsPerRow)
+			}
+		})
+	case "q5k1":
+		q5k1MatmulInto(w, xData, xRows, xCols, result)
+	case "q4k", "q5k", "q6k":
+		nSB := w.Groups
+		var rowBytes int
+		var dot func([]byte, int, []float32, int, int) float32
+		switch w.QType {
+		case "q4k":
+			rowBytes, dot = nSB*q4kBlockBytes, q4kDotRowF32
+		case "q5k":
+			rowBytes, dot = nSB*q5kBlockBytes, q5kDotRowF32
+		case "q6k":
+			rowBytes, dot = nSB*q6kBlockBytes, q6kDotRowF32
+		}
+		parallelFor(xRows*outFeatures, func(start, end int) {
+			for idx := start; idx < end; idx++ {
+				xi := idx / outFeatures
+				j := idx % outFeatures
+				result[xi*outFeatures+j] = dot(rawBytes, j*rowBytes, xData, xi*xCols, nSB)
 			}
 		})
 	}
@@ -584,6 +624,10 @@ func modelMatmulRowQuantIntoF32(w *QuantWeight, normed []float32, dst []float32)
 
 	switch w.QType {
 	case "q8":
+		if useInt8Q8 {
+			q8q8MatmulInto(w, normed, 1, w.Cols, result)
+			return result
+		}
 		groupsPerRow := w.Groups
 		rowBytes := groupsPerRow * 34
 		parallelFor(outFeatures, func(start, end int) {
@@ -593,6 +637,10 @@ func modelMatmulRowQuantIntoF32(w *QuantWeight, normed []float32, dst []float32)
 		})
 		return result
 	case "q4":
+		if useInt8Q4 {
+			q4q8MatmulInto(w, normed, 1, w.Cols, result)
+			return result
+		}
 		groupsPerRow := w.Groups
 		rowBytes := groupsPerRow * 18
 		parallelFor(outFeatures, func(start, end int) {
@@ -602,6 +650,10 @@ func modelMatmulRowQuantIntoF32(w *QuantWeight, normed []float32, dst []float32)
 		})
 		return result
 	case "q4_1":
+		if useInt8Q41 {
+			q41q8MatmulInto(w, normed, 1, w.Cols, result)
+			return result
+		}
 		groupsPerRow := w.Groups
 		rowBytes := groupsPerRow * 20
 		parallelFor(outFeatures, func(start, end int) {
@@ -616,6 +668,36 @@ func modelMatmulRowQuantIntoF32(w *QuantWeight, normed []float32, dst []float32)
 		parallelFor(outFeatures, func(start, end int) {
 			for j := start; j < end; j++ {
 				result[j] = q5DotRowsF32(rawBytes, j*rowBytes, normed, 0, groupsPerRow)
+			}
+		})
+		return result
+	case "q5k1":
+		q5k1MatmulInto(w, normed, 1, w.Cols, result)
+		return result
+	case "q4k":
+		nSB := w.Groups
+		rowBytes := nSB * q4kBlockBytes
+		parallelFor(outFeatures, func(start, end int) {
+			for j := start; j < end; j++ {
+				result[j] = q4kDotRowF32(rawBytes, j*rowBytes, normed, 0, nSB)
+			}
+		})
+		return result
+	case "q5k":
+		nSB := w.Groups
+		rowBytes := nSB * q5kBlockBytes
+		parallelFor(outFeatures, func(start, end int) {
+			for j := start; j < end; j++ {
+				result[j] = q5kDotRowF32(rawBytes, j*rowBytes, normed, 0, nSB)
+			}
+		})
+		return result
+	case "q6k":
+		nSB := w.Groups
+		rowBytes := nSB * q6kBlockBytes
+		parallelFor(outFeatures, func(start, end int) {
+			for j := start; j < end; j++ {
+				result[j] = q6kDotRowF32(rawBytes, j*rowBytes, normed, 0, nSB)
 			}
 		})
 		return result

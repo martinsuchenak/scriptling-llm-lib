@@ -71,11 +71,23 @@ tasks:
       - GOOS=windows GOARCH=arm64 go build -o ./bin/windows_arm64/sllm.exe  ./examples/sllm/
       - GOOS=windows GOARCH=arm64 go build -o ./bin/windows_arm64/infer.exe ./examples/infer/
 
+  build:examples:darwin:
+    desc: Build example binaries for macOS (amd64 and arm64)
+    cmds:
+      - mkdir -p ./bin/darwin_amd64 ./bin/darwin_arm64
+      - GOOS=darwin GOARCH=amd64 go build -o ./bin/darwin_amd64/basic ./examples/basic/
+      - GOOS=darwin GOARCH=amd64 go build -o ./bin/darwin_amd64/sllm  ./examples/sllm/
+      - GOOS=darwin GOARCH=amd64 go build -o ./bin/darwin_amd64/infer ./examples/infer/
+      - GOOS=darwin GOARCH=arm64 go build -o ./bin/darwin_arm64/basic ./examples/basic/
+      - GOOS=darwin GOARCH=arm64 go build -o ./bin/darwin_arm64/sllm  ./examples/sllm/
+      - GOOS=darwin GOARCH=arm64 go build -o ./bin/darwin_arm64/infer ./examples/infer/
+
   build:dist:
-    desc: Build example binaries for all platforms (native, Linux, Windows)
+    desc: Build example binaries for all platforms (native, Linux, macOS, Windows)
     deps:
       - build:examples
       - build:examples:linux
+      - build:examples:darwin
       - build:examples:windows
 
   run:sllm:
