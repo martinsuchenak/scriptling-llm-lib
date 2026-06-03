@@ -8,22 +8,24 @@ MODELS=all ./bench/fleet.sh bench all
 ```
 
 **Decode t/s** is the primary metric (sustained autoregressive generation).
-**Prefill t/s** is the prompt-processing pass. All models are SmolLM2, run across a
-fleet of six machines.
+**Prefill t/s** is the prompt-processing pass. All models are SmolLM2, run on
+bare-metal hosts (virtualized runs are excluded — their scheduler/fork-join
+behaviour is host-specific and not representative).
 
 ---
 
 ## Headline: k-quant models run on fast SIMD kernels
 
 k-quant weights (`Q4_K`, `Q5_K`, `Q6_K`) and the `IQ4_NL` i-quant are mapped onto
-the library's existing fused int8 SIMD kernels (`q41q8` / `q8q8`) instead of being
-expanded to dense float32. On an Apple M5 Max this is a **~3× decode speedup** for
-the most common k-quant models:
+the library's existing fused int8 SIMD kernels (`q41q8` / `q8q8`) rather than being
+expanded to dense float32. Where the int8 kernel is available this is the default
+path and runs the common k-quant models **~3× faster** than the dense-float
+fallback (Apple M5 Max, SmolLM2-1.7B):
 
-| 1.7B model | dense float (before) | fast path (now) | speedup |
-|------------|---------------------:|----------------:|:-------:|
-| `Q4_K_M`   | ~10.6 t/s            | **33.6 t/s**    | 3.2×    |
-| `Q5_K_M`   | ~10.0 t/s            | **26.6 t/s**    | 2.7×    |
+| 1.7B model | dense-float fallback | int8 fast path | speedup |
+|------------|---------------------:|---------------:|:-------:|
+| `Q4_K_M`   | ~10.6 t/s            | **33.6 t/s**   | 3.2×    |
+| `Q5_K_M`   | ~10.0 t/s            | **26.6 t/s**   | 2.7×    |
 
 No hand-written k-quant assembly: `Q4_K` is re-expressed as `Q4_1`, `Q5_K` as two
 `Q4_1` weights, `Q6_K`/`IQ4_NL` as `Q8_0` — all reusing kernels that already exist.
@@ -32,26 +34,26 @@ No hand-written k-quant assembly: `Q4_K` is re-expressed as `Q4_1`, `Q5_K` as tw
 
 ## Decode throughput — SmolLM2-1.7B (t/s, higher is better)
 
-| Quant     | M5 Max | 9900X | M2 Max | i5-8500T | 4700U | X5675¹ |
-|-----------|-------:|------:|-------:|---------:|------:|-------:|
-| Q4_0      | **55.4** | 35.6 | 26.5 | 11.9 | 7.2 | 1.3 |
-| Q4_K_M    | **33.6** | 22.8 | 13.4 | 4.9  | 5.0 | 1.5 |
-| Q8_0      | 29.0   | 25.7 | 11.7 | 8.4  | 4.3 | 5.6 |
-| Q5_K_M    | 26.6   | 17.0 | 10.8 | 3.7  | 3.0 | 1.5 |
-| Q3_K_M    | 15.2   | 11.8 |  5.3 | 2.0  | 1.1 | 1.5 |
-| Q2_K      | 10.8   |  8.6 |  3.6 | 1.4  | 0.7 | 1.5 |
+| Quant     | M5 Max | 9900X | M2 Max | i5-8500T | X5675¹ |
+|-----------|-------:|------:|-------:|---------:|-------:|
+| Q4_0      | **55.4** | 35.6 | 26.5 | 11.9 | 1.3 |
+| Q4_K_M    | **33.6** | 22.8 | 13.4 | 4.9  | 1.5 |
+| Q8_0      | 29.0   | 25.7 | 11.7 | 8.4  | 5.6 |
+| Q5_K_M    | 26.6   | 17.0 | 10.8 | 3.7  | 1.5 |
+| Q3_K_M    | 15.2   | 11.8 |  5.3 | 2.0  | 1.5 |
+| Q2_K      | 10.8   |  8.6 |  3.6 | 1.4  | 1.5 |
 
 ## Decode throughput — SmolLM2-135M (t/s)
 
-| Quant     | M5 Max | 9900X | M2 Max | i5-8500T | 4700U | X5675 |
-|-----------|-------:|------:|-------:|---------:|------:|------:|
-| Q4_0      | **208.1** | 179.8 | 119.7 | 54.4 | 36.4 | 11.1 |
-| Q8_0      | 160.4  | 170.0 |  81.6 | 49.5 | 26.9 | 32.7 |
-| Q6_K      | 136.5  | 137.6 |  66.7 | 31.7 | 27.2 | 25.7 |
-| Q4_K_M    |  96.6  |  74.8 |  48.9 | 15.1 |  9.1 | 10.5 |
-| Q3_K_L    |  77.5  |  75.3 |  38.0 | 15.1 | 18.8 | 12.6 |
-| Q5_K_M    |  76.5  |  77.1 |  38.1 | 14.6 |  8.9 | 13.2 |
-| Q2_K      |  74.0  |  72.2 |  34.7 |  4.7 | 18.2 | 12.7 |
+| Quant     | M5 Max | 9900X | M2 Max | i5-8500T | X5675 |
+|-----------|-------:|------:|-------:|---------:|------:|
+| Q4_0      | **208.1** | 179.8 | 119.7 | 54.4 | 11.1 |
+| Q8_0      | 160.4  | 170.0 |  81.6 | 49.5 | 32.7 |
+| Q6_K      | 136.5  | 137.6 |  66.7 | 31.7 | 25.7 |
+| Q4_K_M    |  96.6  |  74.8 |  48.9 | 15.1 | 10.5 |
+| Q3_K_L    |  77.5  |  75.3 |  38.0 | 15.1 | 12.6 |
+| Q5_K_M    |  76.5  |  77.1 |  38.1 | 14.6 | 13.2 |
+| Q2_K      |  74.0  |  72.2 |  34.7 |  4.7 | 12.7 |
 
 ¹ **X5675 has no AVX2.** The int8 SIMD kernels (`q41q8`/`q8q8`) require AVX2/NEON, so
 on this host k-quants fall back to dense float32, which is slow on this 2011 CPU.
@@ -68,7 +70,6 @@ any CPU from the last decade does much better.
 | M2 Max     | Apple M2 Max              | ARM64 NEON (`SDOT`)     | ~½ the M5 Max throughput |
 | 9900X      | AMD Ryzen 9 9900X (Zen 5) | x86-64 AVX2 + AVX-VNNI  | fast desktop; dual-channel DDR5 |
 | i5-8500T   | Intel Core i5-8500T       | x86-64 AVX2             | low-power desktop |
-| 4700U      | AMD Ryzen 7 4700U         | x86-64 AVX2             | laptop; run in a VM |
 | X5675      | Intel Xeon X5675 (2011)   | x86-64 SSE4.2 (no AVX2) | dense-float fallback only |
 
 One binary runs on all of them: `GOAMD64=v1`, with SIMD kernels selected at runtime
@@ -204,28 +205,6 @@ SmolLM2-135M-Q8_0                   104.7     49.5
 SmolLM2-360M-Q4_0                    61.1     28.1
 SmolLM2-360M-Q8_0                    48.0     25.0
 tinyllama-1.1b-Q8_0                  18.1     11.7
-```
-
-### AMD Ryzen 7 4700U (x86-64, AVX2; VM)
-
-```
-model                              prefill   decode
-SmolLM2-1.7B-Q2_K                     0.7      0.7
-SmolLM2-1.7B-Q3_K_M                   1.1      1.1
-SmolLM2-1.7B-Q4_0                    13.1      7.2
-SmolLM2-1.7B-Q4_K_M                   7.4      5.0
-SmolLM2-1.7B-Q5_K_M                   4.8      3.0
-SmolLM2-1.7B-Q8_0                     7.3      4.3
-SmolLM2-135M-Q2_K                    29.6     18.2
-SmolLM2-135M-Q3_K_L                  31.5     18.8
-SmolLM2-135M-Q4_0                    68.4     36.4
-SmolLM2-135M-Q4_K_M                  17.1      9.1
-SmolLM2-135M-Q5_K_M                  12.8      8.9
-SmolLM2-135M-Q6_K                    58.1     27.2
-SmolLM2-135M-Q8_0                    61.2     26.9
-SmolLM2-360M-Q4_0                    35.4     18.9
-SmolLM2-360M-Q8_0                    22.8     12.6
-tinyllama-1.1b-Q8_0                  10.4      6.2
 ```
 
 ### Intel Xeon X5675 (x86-64, no AVX2 — dense-float fallback)
