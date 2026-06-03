@@ -158,6 +158,11 @@ func q8q8MatmulInto(w *QuantWeight, xData []float32, xRows, xCols int, dst []flo
 	}
 
 	raw := w.Raw
+	// Weight-row outer, activation-row inner: each weight row is streamed from
+	// memory once and reused across all xRows (the batched-GEMM win — weight traffic
+	// drops ~xRows×). For xRows==1 (decode) this is identical to the flat order and
+	// gating, so the generation hot path is unchanged; the reuse only kicks in for
+	// multi-row matmuls (prompt prefill and batched embedding).
 	if q8q8VNNIAvail {
 		// Per-group activation correction (128·Σxq), shared across weight rows.
 		corrP := int32Pool.Get().(*[]int32)
@@ -172,50 +177,64 @@ func q8q8MatmulInto(w *QuantWeight, xData []float32, xRows, xCols int, dst []flo
 				corr[xi*groups+g] = 128 * s
 			}
 		}
-		parallelFor(xRows*outFeatures, func(start, end int) {
+		parallelOverItems(outFeatures, xRows*outFeatures, func(jStart, jEnd int) {
 			cmbP := scalePool.Get().(*[]float32)
 			cmb := growSlice(*cmbP, groups)
-			for idx := start; idx < end; idx++ {
-				xi := idx / outFeatures
-				j := idx % outFeatures
+			wsP := scalePool.Get().(*[]float32)
+			ws := growSlice(*wsP, groups)
+			for j := jStart; j < jEnd; j++ {
 				wOff := j * rowBytes
-				xsRow := xs[xi*groups:]
 				for g := 0; g < groups; g++ {
 					ro := wOff + g*34
-					cmb[g] = f16LUT[uint16(raw[ro])|uint16(raw[ro+1])<<8] * xsRow[g]
+					ws[g] = f16LUT[uint16(raw[ro])|uint16(raw[ro+1])<<8]
 				}
-				dst[idx] = q8q8VNNIDot(&raw[wOff], &xq[xi*xCols], &cmb[0], &corr[xi*groups], groups)
+				for xi := 0; xi < xRows; xi++ {
+					xsRow := xs[xi*groups:]
+					for g := 0; g < groups; g++ {
+						cmb[g] = ws[g] * xsRow[g]
+					}
+					dst[xi*outFeatures+j] = q8q8VNNIDot(&raw[wOff], &xq[xi*xCols], &cmb[0], &corr[xi*groups], groups)
+				}
 			}
+			*wsP = ws
+			scalePool.Put(wsP)
 			*cmbP = cmb
 			scalePool.Put(cmbP)
 		})
 		*corrP = corr
 		int32Pool.Put(corrP)
 	} else if q8q8FusedAvail {
-		parallelFor(xRows*outFeatures, func(start, end int) {
-			// One reusable combined-scale buffer per worker chunk.
+		parallelOverItems(outFeatures, xRows*outFeatures, func(jStart, jEnd int) {
 			cmbP := scalePool.Get().(*[]float32)
 			cmb := growSlice(*cmbP, groups)
-			for idx := start; idx < end; idx++ {
-				xi := idx / outFeatures
-				j := idx % outFeatures
+			wsP := scalePool.Get().(*[]float32)
+			ws := growSlice(*wsP, groups)
+			for j := jStart; j < jEnd; j++ {
 				wOff := j * rowBytes
-				xsRow := xs[xi*groups:]
 				for g := 0; g < groups; g++ {
 					ro := wOff + g*34
-					cmb[g] = f16LUT[uint16(raw[ro])|uint16(raw[ro+1])<<8] * xsRow[g]
+					ws[g] = f16LUT[uint16(raw[ro])|uint16(raw[ro+1])<<8]
 				}
-				dst[idx] = q8q8RowFused(&raw[wOff], &xq[xi*xCols], &cmb[0], groups)
+				for xi := 0; xi < xRows; xi++ {
+					xsRow := xs[xi*groups:]
+					for g := 0; g < groups; g++ {
+						cmb[g] = ws[g] * xsRow[g]
+					}
+					dst[xi*outFeatures+j] = q8q8RowFused(&raw[wOff], &xq[xi*xCols], &cmb[0], groups)
+				}
 			}
+			*wsP = ws
+			scalePool.Put(wsP)
 			*cmbP = cmb
 			scalePool.Put(cmbP)
 		})
 	} else {
-		parallelFor(xRows*outFeatures, func(start, end int) {
-			for idx := start; idx < end; idx++ {
-				xi := idx / outFeatures
-				j := idx % outFeatures
-				dst[idx] = q8q8RowDot(raw, j*rowBytes, xq[xi*xCols:], xs[xi*groups:], groups)
+		parallelOverItems(outFeatures, xRows*outFeatures, func(jStart, jEnd int) {
+			for j := jStart; j < jEnd; j++ {
+				wOff := j * rowBytes
+				for xi := 0; xi < xRows; xi++ {
+					dst[xi*outFeatures+j] = q8q8RowDot(raw, wOff, xq[xi*xCols:], xs[xi*groups:], groups)
+				}
 			}
 		})
 	}

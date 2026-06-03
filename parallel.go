@@ -262,6 +262,20 @@ func parallelFor(n int, fn func(start, end int)) {
 	parallelForChunked(n, fn)
 }
 
+// parallelOverItems runs fn over chunks of [0,nItems) when the total `work` (not
+// nItems) exceeds the parallel threshold; otherwise it runs serially. Use it when
+// the parallel axis is smaller than the work it represents — e.g. a matmul tiled
+// over output features where each feature is applied to many activation rows, so
+// the weight row loads once and is reused across rows. Gating on `work` (rows ×
+// features) rather than nItems keeps a wide-but-shallow batch from staying serial.
+func parallelOverItems(nItems, work int, fn func(start, end int)) {
+	if work <= parThreshold || nWorkers <= 1 || atomic.LoadInt32(&activeInferences) > 1 {
+		fn(0, nItems)
+		return
+	}
+	parallelForChunked(nItems, fn)
+}
+
 // parallelForChunked splits [0,n) into one chunk per worker and runs the batch
 // on the pool, with the calling goroutine participating, blocking until done.
 func parallelForChunked(n int, fn func(start, end int)) {
