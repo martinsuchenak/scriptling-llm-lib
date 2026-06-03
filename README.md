@@ -18,12 +18,13 @@ The library is a single Go package (`scriptlingllmlib`) with these logical group
 
 | Area | Files | Description |
 |------|-------|-------------|
-| **Library registration** | `llm.go` | Registers 55+ functions as the `llm` Scriptling library |
-| **Model loading** | `gguf.go`, `kquants.go` | GGUF v3 parser — F32, F16, Q4_0/1, Q5_0/1, Q8_0, and k-quants Q2_K–Q6_K |
+| **Library registration** | `llm.go` | Registers 51 functions as the `llm` Scriptling library |
+| **Model loading** | `gguf.go`, `kquants.go` | GGUF v3 parser — F32, F16, Q4_0/1, Q5_0/1, Q8_0, k-quants Q2_K–Q6_K, IQ4_NL |
 | **Inference model** | `model.go` | Transformer forward pass, KV cache, autoregressive generation |
 | **Tokenizer** | `tokenizer.go` | BPE tokenizer with sentencepiece + GPT-2 byte-fallback |
 | **Chat templates** | `chat_template.go` | ChatML/Jinja2 template rendering |
-| **Quantized matmul** | `q8_fast.go`, `q5_fast.go` | Fused quantized dot products (Q4_0, Q4_1, Q5_0, Q8_0) |
+| **Quantized matmul** | `q8q8.go`, `q4q8.go`, `q41q8.go`, `q8_fast.go` | Fused int8-SIMD dot products (Q8_0, Q4_0, Q4_1) — AVX2/AVX-VNNI + NEON |
+| **K-quant acceleration** | `kquant_kernels.go` | Maps Q4_K→Q4_1, Q5_K→2×Q4_1, Q6_K/IQ4_NL→Q8_0 onto the fused kernels |
 | **Quantize/dequantize** | `quantize.go` | Float-to-Q8 conversion, dequant helpers |
 | **Fused ops** | `fused.go`, `fused_ops.go`, `fused_block.go` | Linear layers, RMS norm, RoPE, attention, FFN, output logits |
 | **Primitives** | `llm_primitives.go` | Vector ops, activations, head splitting/merging, repeat KV |
@@ -48,9 +49,9 @@ The library is a single Go package (`scriptlingllmlib`) with these logical group
 | Q8_0 | 34 B | 32 | packed kernel | Weight matrices, token embeddings |
 | Q2_K | 84 B | 256 | dense float | Weight matrices |
 | Q3_K | 110 B | 256 | dense float | Weight matrices |
-| Q4_K | 144 B | 256 | dense float | Weight matrices |
-| Q5_K | 176 B | 256 | dense float | Weight matrices |
-| Q6_K | 210 B | 256 | dense float | Weight matrices |
+| Q4_K | 144 B | 256 | → Q4_1 kernel | Weight matrices |
+| Q5_K | 176 B | 256 | → 2×Q4_1 kernel | Weight matrices |
+| Q6_K | 210 B | 256 | → Q8_0 kernel | Weight matrices |
 | IQ4_NL | 18 B | 32 | → Q8_0 kernel | i-quant fallback rows |
 
 K-quant models (e.g. `Q4_K_M`, `Q5_K_M`, `Q6_K`) load and run correctly.
@@ -392,7 +393,9 @@ The library auto-tunes itself to the host CPU at startup; in most cases nothing 
 - *Q8×Q8* — quantizes activations to int8 so the hot loop is pure-integer SIMD (`VPMADDWD`). On hosts where the *float* SIMD path is penalized but the *integer* pipeline is not (e.g. an AMD Ryzen 7 4700U VM), this is ~3.6× faster than scalar at the kernel level and roughly doubles decode throughput. Costs ~1% activation-quantization error (negligible for inference).
 - *Q4×Q8* — Q4_0 has no float SIMD kernel, so a fused AVX2 kernel decodes the 4-bit weights in SIMD and dots them against int8 activations in one pass — ~10× the old scalar Q4 path at the kernel level (e.g. ~1.8 → ~6.6 t/s decode on a 135M in the 4700U VM). Q4_0 halves weight bandwidth vs Q8_0, which matters for larger models that are memory-bound.
 
-The selector picks whichever actually wins on the host, so no configuration is needed.
+The selector picks whichever actually wins on the host, so no configuration is needed. To override it, set `SLLM_Q8_KERNEL=int8` (force the integer-activation path), `=float` (force full-precision activations — use if the ~1% activation-quantization error matters), or leave it unset to auto-select.
+
+**K-quant fast paths.** `Q4_K`, `Q5_K`, `Q6_K`, and `IQ4_NL` are mapped onto the fused int8 kernels above (Q4_K→Q4_1, Q5_K→2×Q4_1, Q6_K/IQ4_NL→Q8_0) and accelerated automatically wherever the int8 kernel is available — no flag needed (see [Supported GGUF Tensor Types](#supported-gguf-tensor-types)). On hosts without the int8 kernel they fall back to dense float32. For RAM-limited hosts, `SLLM_KQUANT_PACKED=1` keeps `Q5_K`/`Q6_K` in a scalar packed form (~4–6× less memory than dense float, at lower speed) so larger k-quant models still fit.
 
 **Parallelism threshold** — `SLLM_PARALLEL_THRESHOLD` (env var, integer). Loops with fewer than this many items run serially instead of being split across worker goroutines. Fork/join has real cost (goroutine wakeup + sync), so on hosts where it is expensive, splitting the small per-token decode matmuls is a net loss. At startup the library measures whether splitting a decode-sized matmul actually beats running it serially and picks `256` (parallelize aggressively — bare metal, Apple silicon) or `8192` (keep small matmuls serial, parallelize only the large prefill/output projections — hosts with expensive fork/join, e.g. some VMs). This is measured directly and is independent of the kernel choice, so a bare-metal box that prefers the int8 kernel still parallelizes aggressively.
 

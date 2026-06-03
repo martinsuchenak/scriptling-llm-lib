@@ -100,7 +100,9 @@ func q4kDotBlockF32(raw []byte, off int, x []float32, xb int) float32 {
 // convertQ5KToTwoQ41 expresses Q5_K as two Q4_1 weights that sum to it, so the
 // fast q41q8 kernel can be run twice (no bespoke Q5_K kernel). A Q5_K value is
 // q5 = q4 + 16*high_bit, so
-//   w = scale*q5 + min = (scale*q4 + min) + (16*scale)*high_bit
+//
+//	w = scale*q5 + min = (scale*q4 + min) + (16*scale)*high_bit
+//
 // The first term is a Q4_1 block (low nibbles, scale, min); the second is a Q4_1
 // block (the high bit as a 0/1 "q4", scale 16*scale, min 0). Output is
 // [low blocks for all rows][high blocks for all rows], each half a native Q4_1

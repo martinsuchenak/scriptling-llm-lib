@@ -60,9 +60,9 @@ func TestValidUTF8PrefixLen(t *testing.T) {
 	}{
 		{"", 0},
 		{"abc", 3},
-		{euro, 3},          // complete
-		{euro[:2], 0},      // 2 of 3 bytes -> hold all back
-		{euro[:1], 0},      // 1 of 3 bytes
+		{euro, 3},            // complete
+		{euro[:2], 0},        // 2 of 3 bytes -> hold all back
+		{euro[:1], 0},        // 1 of 3 bytes
 		{"ab" + euro[:2], 2}, // keep "ab", hold the partial euro
 		{"ab" + euro, 5},     // all complete
 	}
