@@ -63,9 +63,10 @@ MODELS="SmolLM2-1.7B-Instruct-Q4_K_M.gguf SmolLM2-1.7B-Instruct-Q8_0.gguf" \
 
 Encoder embedding models (`bert` / `nomic-bert` — all-MiniLM, BGE, E5, GTE,
 nomic-embed-text) are detected automatically: `infer` embeds the prompt instead
-of generating and reports **embeddings/second**. They appear in the same matrix —
-just drop the `.gguf` into the models dir and bench as usual (both the prefill and
-decode columns show `emb/s` for these, since an encoder has no decode loop):
+of generating and reports embedding throughput. They appear in the same matrix —
+just drop the `.gguf` into the models dir and bench as usual. An encoder has no
+decode loop, so the two columns carry **latency** (`ms`/embed) and **throughput**
+(`emb/s`) instead of prefill/decode `t/s`:
 
 ```bash
 MODELS="all-MiniLM-L6-v2-Q8_0.gguf nomic-embed-text-v1.5.Q8_0.gguf" \

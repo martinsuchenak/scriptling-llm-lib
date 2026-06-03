@@ -103,8 +103,8 @@ func main() {
 }
 
 // runEmbedBench embeds the prompt repeatedly and reports throughput. Stats are
-// tagged with "prefill"/"decode" so the bench harness picks up the emb/s figure
-// (encoder models have no decode loop; both columns show emb/s).
+// tagged with "prefill"/"decode" so the bench harness picks them up; an encoder
+// has no decode loop, so they carry latency (ms/embed) and throughput (emb/s).
 func runEmbedBench(model, text string) {
 	v, err := scriptlingllmlib.Embed(scriptlingllmlib.EmbedOptions{Model: model, Text: text, Normalize: true})
 	if err != nil {
@@ -125,8 +125,10 @@ func runEmbedBench(model, text string) {
 	fmt.Printf("[%d-dim embedding]\n", dim)
 	fmt.Fprintln(os.Stderr, "---")
 	fmt.Fprintf(os.Stderr, "embed     %4d dims   %d runs in %6.0f ms\n", dim, runs, elapsedMs)
-	fmt.Fprintf(os.Stderr, "prefill   %4d dims   per-embed %5.1f ms   %6.1f emb/s\n", dim, elapsedMs/float64(runs), embPerSec)
-	fmt.Fprintf(os.Stderr, "decode    %4d runs   total   %6.0f ms   %6.1f emb/s\n", runs, elapsedMs, embPerSec)
+	// "prefill"/"decode" tags so the bench harness's parser picks these up; for an
+	// encoder they carry latency (ms/embed) and throughput (emb/s).
+	fmt.Fprintf(os.Stderr, "prefill   %4d dims   latency    %6.1f ms\n", dim, elapsedMs/float64(runs))
+	fmt.Fprintf(os.Stderr, "decode    %4d runs   throughput %6.1f emb/s\n", runs, embPerSec)
 }
 
 func tokensPerSec(n int, ms float64) float64 {
