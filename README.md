@@ -398,7 +398,8 @@ go run ./examples/basic/
 
 ```bash
 task test              # unit tests
-task smoke             # end-to-end generation against all downloaded models
+task smoke             # scans models/ and smoke-tests each .gguf (generation, or
+                       # embedding for encoder models); SMOKE_MODELS_DIR overrides
 ```
 
 Accuracy is guarded by perplexity regression tests (`accuracy_test.go`): they compute the model's perplexity over a fixed passage and assert it stays within a golden band, and that the Q8 model is no less accurate than Q4. These catch silent corruption from changes to the hand-tuned quantized kernels. They run as part of `task test` when the SmolLM2-135M models are present, and skip otherwise.
