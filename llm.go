@@ -486,6 +486,24 @@ Keyword args:
 Returns:
   List of floats (length = model embedding dimension).`,
 		},
+		"embed_batch": {
+			Fn: fnEmbedBatch,
+			HelpText: `embed_batch(model_path, texts) - Embed many texts in one pass
+
+Parameters:
+  model_path - path to .gguf model file
+  texts      - list of strings to embed
+
+Keyword args:
+  pooling   - "mean" (default) or "last"
+  normalize - L2-normalize each vector (default false)
+
+For encoder models the whole batch is encoded in a single forward pass (far
+faster than calling embed in a loop). Results match embed() per text.
+
+Returns:
+  2D float array of shape [len(texts)][embedding dimension].`,
+		},
 	},
 	map[string]object.Object{
 		"VERSION": object.NewString("1.1.0"),

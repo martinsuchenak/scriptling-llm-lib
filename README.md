@@ -43,7 +43,7 @@ The library is a single Go package (`scriptlingllmlib`) with these logical group
 
 | Area | Files | Description |
 |------|-------|-------------|
-| **Library registration** | `llm.go` | Registers 51 functions as the `llm` Scriptling library |
+| **Library registration** | `llm.go` | Registers 52 functions as the `llm` Scriptling library |
 | **Model loading** | `gguf.go`, `kquants.go` | GGUF v3 parser — F32, F16, Q4_0/1, Q5_0/1, Q8_0, k-quants Q2_K–Q6_K, IQ4_NL |
 | **Inference model** | `model.go` | Transformer forward pass, KV cache, autoregressive generation |
 | **Encoder embeddings** | `model_bert.go`, `tokenizer_wordpiece.go` | BERT / nomic-bert bidirectional encoder + WordPiece tokenizer for embedding models (all-MiniLM, BGE, E5, GTE, nomic-embed-text) |
@@ -299,6 +299,7 @@ All functions below are available via `import llm` in Scriptling scripts.
 
 - `llm.generate(model, prompt, max_tokens, strategy, ...)` — End-to-end generation from GGUF files. Supports `temperature`, `top_k`, `top_p`, `repeat_penalty`, `system_prompt`, `template`, `stats`, `session` kwargs.
 - `llm.embed(model, text, pooling="mean", normalize=false)` — Dense embedding vector (list of floats) from the model's final hidden states.
+- `llm.embed_batch(model, texts, pooling="mean", normalize=false)` — Embed a list of texts in one pass; returns a 2D array `[len(texts)][dim]`. For encoder models the batch is encoded in a single forward pass (much faster than calling `embed` in a loop).
 - `llm.clear_session(model, session_id)` — Clear a cached session's KV cache.
 
 ### Linear Algebra

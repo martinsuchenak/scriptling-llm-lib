@@ -1041,3 +1041,63 @@ func fnEmbed(ctx context.Context, kwargs object.Kwargs, args ...object.Object) o
 	}
 	return object.NewFloatArray1D(out)
 }
+
+func fnEmbedBatch(ctx context.Context, kwargs object.Kwargs, args ...object.Object) object.Object {
+	if err := errors.ExactArgs(args, 2); err != nil {
+		return err
+	}
+
+	modelPath, ok := args[0].(*object.String)
+	if !ok {
+		return errors.NewTypeError("STRING", args[0].Type().String())
+	}
+
+	list, ok := args[1].(*object.List)
+	if !ok {
+		return errors.NewTypeError("LIST", args[1].Type().String())
+	}
+	texts := make([]string, len(list.Elements))
+	for i, el := range list.Elements {
+		s, ok := el.(*object.String)
+		if !ok {
+			return errors.NewTypeError("STRING", el.Type().String())
+		}
+		texts[i] = s.StringValue()
+	}
+
+	pooling := PoolingMean
+	if kwargs.Has("pooling") {
+		if p, ok := kwargs.Get("pooling").(*object.String); ok {
+			pooling = p.StringValue()
+		}
+	}
+
+	normalize := false
+	if kwargs.Has("normalize") {
+		if b, ok := kwargs.Get("normalize").(*object.Boolean); ok {
+			normalize = b.BoolValue()
+		}
+	}
+
+	vecs, err := EmbedBatch(EmbedBatchOptions{
+		Model:     modelPath.StringValue(),
+		Texts:     texts,
+		Pooling:   pooling,
+		Normalize: normalize,
+	})
+	if err != nil {
+		return errors.NewError("embed_batch: %s", err.Error())
+	}
+	if len(vecs) == 0 {
+		return object.NewFloatArray2D(nil, 0, 0)
+	}
+
+	dim := len(vecs[0])
+	flat := make([]float64, len(vecs)*dim)
+	for i, v := range vecs {
+		for j, x := range v {
+			flat[i*dim+j] = float64(x)
+		}
+	}
+	return object.NewFloatArray2D(flat, len(vecs), dim)
+}
