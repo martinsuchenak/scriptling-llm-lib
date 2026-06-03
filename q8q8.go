@@ -54,7 +54,7 @@ var f16LUT [65536]float32
 // kernelBenchSink keeps the init-time kernel micro-benchmarks (here and in
 // cpu_amd64.go) from being optimized away as dead code. Declared here so it is
 // available on every architecture.
-var kernelBenchSink float32
+var kernelBenchSink float32 //nolint:unused
 
 func init() {
 	for i := 0; i < 65536; i++ {
