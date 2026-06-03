@@ -71,7 +71,7 @@ var pplGolden = []struct {
 	// Q5_0/Q5_1 fallback) dequantizers; they skip when the file is absent.
 	{"models/SmolLM2-135M-Instruct-Q4_K_M.gguf", 12.764}, // Q4_K(->Q4_1 fast) + Q6_K + Q5_0 + Q8
 	{"models/SmolLM2-135M-Instruct-Q6_K.gguf", 12.934},   // Q6_K
-	{"models/SmolLM2-135M-Instruct-Q5_K_M.gguf", 11.864}, // Q5_K + Q5_1 + Q6_K
+	{"models/SmolLM2-135M-Instruct-Q5_K_M.gguf", 11.833}, // Q5_K(->2xQ4_1 fast) + Q5_1 + Q6_K
 }
 
 const pplTol = 0.10

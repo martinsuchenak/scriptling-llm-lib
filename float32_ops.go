@@ -434,6 +434,8 @@ func modelMatmulQuantIntoF32(w *QuantWeight, xData []float32, xRows, xCols int, 
 				result[xi*outFeatures+j] = q5DotRowsF32(rawBytes, j*rowBytes, xData, xi*xCols, groupsPerRow)
 			}
 		})
+	case "q5k1":
+		q5k1MatmulInto(w, xData, xRows, xCols, result)
 	case "q4k", "q5k", "q6k":
 		nSB := w.Groups
 		var rowBytes int
@@ -668,6 +670,9 @@ func modelMatmulRowQuantIntoF32(w *QuantWeight, normed []float32, dst []float32)
 				result[j] = q5DotRowsF32(rawBytes, j*rowBytes, normed, 0, groupsPerRow)
 			}
 		})
+		return result
+	case "q5k1":
+		q5k1MatmulInto(w, normed, 1, w.Cols, result)
 		return result
 	case "q4k":
 		nSB := w.Groups

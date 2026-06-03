@@ -876,6 +876,12 @@ func (g *GGUFModel) loadWeightF32Direct(name string) (interface{}, error) {
 			raw := convertQ4KToQ41(fileData, offset, rows, cols)
 			return &QuantWeight{QType: "q4_1", Raw: raw, Groups: cols / 32, Rows: rows, Cols: cols}, nil
 		}
+		// Q5_K = Q5_1 = two summed Q4_1 weights (low nibbles + high bit), so it
+		// runs on the fast q41q8 kernel twice. Only when that kernel is available.
+		if ti.Type == 13 && cols%256 == 0 && useInt8Q41 {
+			raw := convertQ5KToTwoQ41(fileData, offset, rows, cols)
+			return &QuantWeight{QType: "q5k1", Raw: raw, Groups: cols / 32, Rows: rows, Cols: cols}, nil
+		}
 		if kquantPacked && cols%256 == 0 {
 			// Q5_K/Q6_K have no fast kernel yet — scalar packed path (memory only).
 			qt, blockBytes := "q5k", q5kBlockBytes

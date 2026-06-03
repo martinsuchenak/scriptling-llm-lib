@@ -114,6 +114,45 @@ func TestQ4KToQ41Parity(t *testing.T) {
 	}
 }
 
+// TestQ5KToTwoQ41Parity checks Q5_K == low Q4_1 + high Q4_1 (the two halves the
+// q41q8 kernel sums), within f16 scale-rounding.
+func TestQ5KToTwoQ41Parity(t *testing.T) {
+	const model = "models/SmolLM2-135M-Instruct-Q5_K_M.gguf"
+	if _, err := os.Stat(model); err != nil {
+		t.Skip("model not present")
+	}
+	g, err := LoadGGUF(model)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer g.ReleaseFileData()
+	var ti *tensorInfo
+	for _, info := range g.Tensors {
+		if info.Type == 13 && len(info.Dims) == 2 {
+			ti = info
+			break
+		}
+	}
+	if ti == nil {
+		t.Skip("no Q5_K tensor")
+	}
+	rows, cols := int(ti.Dims[1]), int(ti.Dims[0])
+	n := rows * cols
+	dense := g.dequantize1D(g.fileData, ti, n)
+	conv := convertQ5KToTwoQ41(g.fileData, int(ti.RawOffset), rows, cols)
+	low := dequantizeQ4_1Native(conv, 0, n)
+	high := dequantizeQ4_1Native(conv, rows*(cols/32)*20, n)
+	runtime.KeepAlive(g)
+	var sad, smag float64
+	for i := range dense {
+		sad += math.Abs(dense[i] - (low[i] + high[i]))
+		smag += math.Abs(dense[i])
+	}
+	if rel := sad / smag; rel > 5e-3 {
+		t.Errorf("Q5_K->2xQ4_1 relErr %.3e too high", rel)
+	}
+}
+
 // TestKQuantPackedEndToEnd exercises the full packed path (build + dispatch) and
 // confirms perplexity matches the dense-float path within float-rounding noise.
 func TestKQuantPackedEndToEnd(t *testing.T) {

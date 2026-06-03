@@ -97,6 +97,80 @@ func q4kDotBlockF32(raw []byte, off int, x []float32, xb int) float32 {
 	return sum
 }
 
+// convertQ5KToTwoQ41 expresses Q5_K as two Q4_1 weights that sum to it, so the
+// fast q41q8 kernel can be run twice (no bespoke Q5_K kernel). A Q5_K value is
+// q5 = q4 + 16*high_bit, so
+//   w = scale*q5 + min = (scale*q4 + min) + (16*scale)*high_bit
+// The first term is a Q4_1 block (low nibbles, scale, min); the second is a Q4_1
+// block (the high bit as a 0/1 "q4", scale 16*scale, min 0). Output is
+// [low blocks for all rows][high blocks for all rows], each half a native Q4_1
+// tensor of (cols/32) 20-byte blocks per row.
+func convertQ5KToTwoQ41(src []byte, srcOff, rows, cols int) []byte {
+	nSB := cols / 256
+	half := rows * (cols / 32) * 20
+	out := make([]byte, 2*half)
+	lo, hi := 0, half
+	for r := 0; r < rows; r++ {
+		rowOff := srcOff + r*nSB*q5kBlockBytes
+		for sb := 0; sb < nSB; sb++ {
+			off := rowOff + sb*q5kBlockBytes
+			d := float16ToFloat64(binary.LittleEndian.Uint16(src[off:]))
+			dmin := float16ToFloat64(binary.LittleEndian.Uint16(src[off+2:]))
+			scales := src[off+4 : off+16]
+			qh := src[off+16 : off+48] // 32 bytes (256 high bits)
+			qs := src[off+48:]         // 128 bytes (256 low nibbles)
+			for jj := 0; jj < 8; jj++ {
+				sc, m := getScaleMinK4(jj, scales)
+				dsc := d * float64(sc)
+
+				// Low Q4_1 block: scale=dsc, min=-dmin*m, q4 = low nibble.
+				binary.LittleEndian.PutUint16(out[lo:], float64ToFloat16(dsc))
+				binary.LittleEndian.PutUint16(out[lo+2:], float64ToFloat16(-dmin*float64(m)))
+				k := (jj / 2) * 32
+				if jj&1 == 0 {
+					for i := 0; i < 16; i++ {
+						out[lo+4+i] = (qs[k+i] & 0x0F) | ((qs[k+i+16] & 0x0F) << 4)
+					}
+				} else {
+					for i := 0; i < 16; i++ {
+						out[lo+4+i] = (qs[k+i] >> 4) | ((qs[k+i+16] >> 4) << 4)
+					}
+				}
+				lo += 20
+
+				// High Q4_1 block: scale=16*dsc, min=0, q4 = (qh>>jj)&1.
+				binary.LittleEndian.PutUint16(out[hi:], float64ToFloat16(16*dsc))
+				binary.LittleEndian.PutUint16(out[hi+2:], 0)
+				for i := 0; i < 16; i++ {
+					out[hi+4+i] = ((qh[i] >> jj) & 1) | (((qh[i+16] >> jj) & 1) << 4)
+				}
+				hi += 20
+			}
+		}
+	}
+	return out
+}
+
+// q5k1MatmulInto runs the two Q4_1 halves of a converted Q5_K weight through the
+// fast q41q8 kernel and sums them (dst = low + high). w.Raw is [low half][high
+// half], each a native Q4_1 tensor.
+func q5k1MatmulInto(w *QuantWeight, xData []float32, xRows, xCols int, dst []float32) {
+	half := w.Rows * w.Groups * 20
+	lowW := &QuantWeight{QType: "q4_1", Raw: w.Raw[:half], Groups: w.Groups, Rows: w.Rows, Cols: w.Cols}
+	highW := &QuantWeight{QType: "q4_1", Raw: w.Raw[half:], Groups: w.Groups, Rows: w.Rows, Cols: w.Cols}
+	q41q8MatmulInto(lowW, xData, xRows, xCols, dst)
+
+	n := xRows * w.Rows
+	tmpP := scalePool.Get().(*[]float32)
+	tmp := growSlice(*tmpP, n)
+	q41q8MatmulInto(highW, xData, xRows, xCols, tmp)
+	for i := 0; i < n; i++ {
+		dst[i] += tmp[i]
+	}
+	*tmpP = tmp
+	scalePool.Put(tmpP)
+}
+
 // q5kDotRowF32 / q5kDotBlockF32 — Q5_K (low 4 bits in qs, 5th bit in qh).
 func q5kDotRowF32(raw []byte, rOff int, x []float32, xOff, nSB int) float32 {
 	var sum float32
