@@ -172,105 +172,176 @@ func buildBertModel(g *GGUFModel) (*InferenceBert, error) {
 	return m, nil
 }
 
-// embed encodes text and returns the pooled (optionally L2-normalized) vector.
+// embed encodes a single text and returns the pooled (optionally L2-normalized)
+// vector. It is a thin wrapper over the batched forward path.
 func (m *InferenceBert) embed(text, pooling string, normalize bool) []float32 {
 	if pooling == "" {
 		pooling = m.pooling
 	}
-	ids := m.Tok.encode(text)
-	n := len(ids)
+	x, offsets, lengths := m.forward([][]int{m.Tok.encode(text)})
+	return m.pool(x, offsets[0], lengths[0], pooling, normalize)
+}
+
+// embedBatch encodes many texts in a single forward pass and returns one pooled
+// vector per text, in input order. Packing the sequences into shared matmuls
+// reads each weight matrix once for the whole batch (instead of once per text),
+// which is the dominant cost for larger encoders — so batched throughput is far
+// higher than calling embed in a loop. Like embed it mutates no shared state, so
+// concurrent calls on the same model are safe.
+func (m *InferenceBert) embedBatch(texts []string, pooling string, normalize bool) [][]float32 {
+	if pooling == "" {
+		pooling = m.pooling
+	}
+	if len(texts) == 0 {
+		return nil
+	}
+	seqs := make([][]int, len(texts))
+	for i, t := range texts {
+		seqs[i] = m.Tok.encode(t)
+	}
+	x, offsets, lengths := m.forward(seqs)
+	out := make([][]float32, len(texts))
+	for s := range texts {
+		out[s] = m.pool(x, offsets[s], lengths[s], pooling, normalize)
+	}
+	return out
+}
+
+// forward runs the encoder over a batch of token-id sequences and returns the
+// final hidden states for every token, flattened as [totalTokens][dim], along
+// with each sequence's start offset (in tokens) and length.
+//
+// All sequences are concatenated into one [T][dim] activation so every linear
+// layer is a single matmul over T rows — each weight is streamed from memory once
+// per batch, and T large enough also crosses the parallel-matmul threshold so one
+// call saturates the cores. Attention and RoPE are applied per sequence (block
+// diagonal) so tokens never attend across sequence boundaries; everything else
+// (embeddings, LayerNorm, residuals, FFN activation) is row-wise and batches
+// transparently.
+func (m *InferenceBert) forward(seqs [][]int) (x []float32, offsets, lengths []int) {
 	dim := m.Dim
 	headDim := dim / m.NHeads
+	nSeq := len(seqs)
 
-	// Embeddings: token + (position if no RoPE) + token-type(0), then LayerNorm.
-	x := make([]float32, n*dim)
-	for i, id := range ids {
-		if id >= m.VocabSize {
-			id = 0
-		}
-		to, te := i*dim, id*dim
-		for d := 0; d < dim; d++ {
-			x[to+d] = m.TokenEmb[te+d]
-			if m.TypeEmb != nil {
-				x[to+d] += m.TypeEmb[d]
+	offsets = make([]int, nSeq)
+	lengths = make([]int, nSeq)
+	T := 0
+	for s, ids := range seqs {
+		offsets[s] = T
+		lengths[s] = len(ids)
+		T += len(ids)
+	}
+	if T == 0 {
+		return nil, offsets, lengths
+	}
+
+	// Embeddings: token + (position if no RoPE) + token-type(0). Position is the
+	// index within each sequence, so it resets at every sequence boundary.
+	x = make([]float32, T*dim)
+	for s, ids := range seqs {
+		base := offsets[s]
+		for i, id := range ids {
+			if id >= m.VocabSize {
+				id = 0
 			}
-		}
-		if !m.useRope && m.PosEmb != nil {
-			pos := i
-			if pos >= m.MaxPos {
-				pos = m.MaxPos - 1
-			}
-			pe := pos * dim
+			to, te := (base+i)*dim, id*dim
 			for d := 0; d < dim; d++ {
-				x[to+d] += m.PosEmb[pe+d]
+				x[to+d] = m.TokenEmb[te+d]
+				if m.TypeEmb != nil {
+					x[to+d] += m.TypeEmb[d]
+				}
+			}
+			if !m.useRope && m.PosEmb != nil {
+				pos := i
+				if pos >= m.MaxPos {
+					pos = m.MaxPos - 1
+				}
+				pe := pos * dim
+				for d := 0; d < dim; d++ {
+					x[to+d] += m.PosEmb[pe+d]
+				}
 			}
 		}
 	}
-	bertLayerNorm(x, n, dim, m.EmbNormW, m.EmbNormB, m.Eps)
+	bertLayerNorm(x, T, dim, m.EmbNormW, m.EmbNormB, m.Eps)
 
-	q := make([]float32, n*dim)
-	k := make([]float32, n*dim)
-	v := make([]float32, n*dim)
-	qkv := make([]float32, n*3*dim)
-	att := make([]float32, n*dim)
-	o := make([]float32, n*dim)
-	up := make([]float32, n*m.FFN)
-	gate := make([]float32, n*m.FFN)
-	down := make([]float32, n*dim)
+	q := make([]float32, T*dim)
+	k := make([]float32, T*dim)
+	v := make([]float32, T*dim)
+	qkv := make([]float32, T*3*dim)
+	att := make([]float32, T*dim)
+	o := make([]float32, T*dim)
+	up := make([]float32, T*m.FFN)
+	gate := make([]float32, T*m.FFN)
+	down := make([]float32, T*dim)
 
 	for li := range m.Layers {
 		L := &m.Layers[li]
 		if L.Wqkv != nil {
-			bertLinear(L.Wqkv, x, n, dim, 3*dim, nil, qkv)
-			for i := 0; i < n; i++ {
+			bertLinear(L.Wqkv, x, T, dim, 3*dim, nil, qkv)
+			for i := 0; i < T; i++ {
 				src, dq := i*3*dim, i*dim
 				copy(q[dq:dq+dim], qkv[src:src+dim])
 				copy(k[dq:dq+dim], qkv[src+dim:src+2*dim])
 				copy(v[dq:dq+dim], qkv[src+2*dim:src+3*dim])
 			}
 		} else {
-			bertLinear(L.Wq, x, n, dim, dim, L.Bq, q)
-			bertLinear(L.Wk, x, n, dim, dim, L.Bk, k)
-			bertLinear(L.Wv, x, n, dim, dim, L.Bv, v)
+			bertLinear(L.Wq, x, T, dim, dim, L.Bq, q)
+			bertLinear(L.Wk, x, T, dim, dim, L.Bk, k)
+			bertLinear(L.Wv, x, T, dim, dim, L.Bv, v)
 		}
-		if m.useRope {
-			bertApplyRope(q, n, m.NHeads, headDim, m.ropeFreqs, m.ropeHalfDim, m.ropeNeox)
-			bertApplyRope(k, n, m.NHeads, headDim, m.ropeFreqs, m.ropeHalfDim, m.ropeNeox)
+		// RoPE and attention are per sequence (block diagonal): slice each
+		// sequence's rows so positions reset and tokens stay within their sequence.
+		for s := 0; s < nSeq; s++ {
+			n := lengths[s]
+			off := offsets[s] * dim
+			if m.useRope {
+				bertApplyRope(q[off:], n, m.NHeads, headDim, m.ropeFreqs, m.ropeHalfDim, m.ropeNeox)
+				bertApplyRope(k[off:], n, m.NHeads, headDim, m.ropeFreqs, m.ropeHalfDim, m.ropeNeox)
+			}
+			bertAttention(q[off:], k[off:], v[off:], n, m.NHeads, headDim, att[off:])
 		}
-		bertAttention(q, k, v, n, m.NHeads, headDim, att)
-		bertLinear(L.Wo, att, n, dim, dim, L.Bo, o)
+		bertLinear(L.Wo, att, T, dim, dim, L.Bo, o)
 		for i := range x {
 			x[i] += o[i]
 		}
-		bertLayerNorm(x, n, dim, L.AttnNormW, L.AttnNormB, m.Eps)
+		bertLayerNorm(x, T, dim, L.AttnNormW, L.AttnNormB, m.Eps)
 
 		if L.Wgate != nil {
-			// Gated GeGLU FFN: gelu(x·Wgate) ⊙ (x·Wup), then ·Wdown.
-			bertLinear(L.Wgate, x, n, dim, m.FFN, nil, gate)
-			bertLinear(L.Wup, x, n, dim, m.FFN, nil, up)
+			// Gated GeGLU FFN: act(x·Wgate) ⊙ (x·Wup), then ·Wdown.
+			bertLinear(L.Wgate, x, T, dim, m.FFN, nil, gate)
+			bertLinear(L.Wup, x, T, dim, m.FFN, nil, up)
 			for i := range up {
 				up[i] = bertAct(gate[i], m.actMode) * up[i]
 			}
 		} else {
-			bertLinear(L.Wup, x, n, dim, m.FFN, L.Bup, up)
+			bertLinear(L.Wup, x, T, dim, m.FFN, L.Bup, up)
 			for i := range up {
 				up[i] = bertAct(up[i], m.actMode)
 			}
 		}
-		bertLinear(L.Wdown, up, n, m.FFN, dim, L.Bdown, down)
+		bertLinear(L.Wdown, up, T, m.FFN, dim, L.Bdown, down)
 		for i := range x {
 			x[i] += down[i]
 		}
-		bertLayerNorm(x, n, dim, L.OutNormW, L.OutNormB, m.Eps)
+		bertLayerNorm(x, T, dim, L.OutNormW, L.OutNormB, m.Eps)
 	}
+	return x, offsets, lengths
+}
 
+// pool reduces one sequence's hidden states (rows [off, off+n) of x) to a single
+// vector via mean or CLS pooling, optionally L2-normalized.
+func (m *InferenceBert) pool(x []float32, off, n int, pooling string, normalize bool) []float32 {
+	dim := m.Dim
 	out := make([]float32, dim)
+	base := off * dim
 	if pooling == "last" || pooling == "cls" {
-		copy(out, x[:dim]) // [CLS] is token 0
+		copy(out, x[base:base+dim]) // [CLS] is the sequence's first token
 	} else {
 		for i := 0; i < n; i++ {
+			ro := base + i*dim
 			for d := 0; d < dim; d++ {
-				out[d] += x[i*dim+d]
+				out[d] += x[ro+d]
 			}
 		}
 		inv := 1.0 / float32(n)

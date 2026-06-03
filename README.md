@@ -224,6 +224,29 @@ b, _ := scriptlingllmlib.Embed(scriptlingllmlib.EmbedOptions{Model: "model.gguf"
 // cosine(a, b) is high for paraphrases, low for unrelated text.
 ```
 
+### `EmbedBatch`
+
+```go
+func EmbedBatch(opts EmbedBatchOptions) ([][]float32, error)
+
+type EmbedBatchOptions struct {
+    Model     string   // required
+    Texts     []string // required
+    Pooling   string   // PoolingMean (default) | PoolingLast
+    Normalize bool
+}
+```
+
+Embeds many texts at once, returning one vector per text in input order. For encoder models the whole batch is encoded in **one packed forward pass** (block-diagonal attention keeps sequences from attending across each other), so every weight matrix is read from memory once for the batch instead of once per text. This is the throughput path for embedding a corpus — much faster than calling `Embed` in a loop, with the gain growing with model size (it's dominated by weight-memory traffic). Results are identical to `Embed` per text. Decoder models fall back to per-text embedding.
+
+```go
+vecs, _ := scriptlingllmlib.EmbedBatch(scriptlingllmlib.EmbedBatchOptions{
+    Model: "nomic-embed-text-v1.5.Q8_0.gguf",
+    Texts: []string{"search_document: ...", "search_document: ...", /* ... */},
+    Normalize: true,
+})
+```
+
 ### Example
 
 ```go

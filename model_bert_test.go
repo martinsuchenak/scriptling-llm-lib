@@ -94,6 +94,65 @@ func TestBertEmbedding(t *testing.T) {
 	}
 }
 
+// TestEmbedBatchMatchesSingle verifies the batched forward (packed sequences +
+// block-diagonal attention) reproduces the per-text Embed results — a sequence's
+// output must not depend on what else shares its batch. Runs against whichever of
+// the bert / nomic-bert test models are present (different attention/FFN paths).
+func TestEmbedBatchMatchesSingle(t *testing.T) {
+	models := []struct{ name, path string }{
+		{"bert", bertTestModel},
+		{"nomic", "models/nomic.gguf"},
+	}
+	texts := []string{
+		"A man is playing a guitar.",
+		"search_document: To bake bread, mix flour, water, yeast and salt.",
+		"short",
+		"The weather forecast predicts heavy rain across the region tomorrow.",
+	}
+	ran := false
+	for _, mdl := range models {
+		if _, err := os.Stat(mdl.path); err != nil {
+			continue
+		}
+		ran = true
+		t.Run(mdl.name, func(t *testing.T) {
+			batch, err := EmbedBatch(EmbedBatchOptions{Model: mdl.path, Texts: texts, Normalize: true})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(batch) != len(texts) {
+				t.Fatalf("got %d vectors, want %d", len(batch), len(texts))
+			}
+			for i, txt := range texts {
+				single, err := Embed(EmbedOptions{Model: mdl.path, Text: txt, Normalize: true})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if len(batch[i]) != len(single) {
+					t.Fatalf("text %d: dim %d vs %d", i, len(batch[i]), len(single))
+				}
+				// Per-row math is identical batched vs single, so this should be
+				// essentially exact (tiny float-order slack only).
+				if c := bertCos(batch[i], single); c < 0.99999 {
+					t.Errorf("text %d: batched vs single cosine %.6f", i, c)
+				}
+				var maxAbs float64
+				for d := range single {
+					if a := math.Abs(float64(batch[i][d] - single[d])); a > maxAbs {
+						maxAbs = a
+					}
+				}
+				if maxAbs > 1e-4 {
+					t.Errorf("text %d: max abs diff %.2e too large", i, maxAbs)
+				}
+			}
+		})
+	}
+	if !ran {
+		t.Skip("no embedding model present")
+	}
+}
+
 // TestNomicEmbedding covers the nomic-bert variant (RoPE + fused QKV + gated
 // SwiGLU FFN). It checks the architecture is detected and that a query matches a
 // relevant document better than an irrelevant one (nomic's retrieval use case).

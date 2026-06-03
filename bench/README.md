@@ -74,12 +74,19 @@ MODELS="all-MiniLM-L6-v2-Q8_0.gguf nomic-embed-text-v1.5.Q8_0.gguf" \
 ```
 
 The matrix is **single-stream** (one embed at a time ≈ one core for short texts).
-To measure **aggregate** throughput across all cores — the figure that matters for
-embedding a corpus, and what a batched `llama-embedding` run reports — drive
-several concurrent embedders (`Embed` is goroutine-safe):
+For **aggregate** throughput across all cores — the figure that matters for
+embedding a corpus, and what a batched `llama-embedding` run reports — use one or
+both of:
+
+- `-embed-batch B` — embed B texts in one packed forward pass (`EmbedBatch`); each
+  weight is read once per batch. This is the main throughput lever, especially for
+  larger models.
+- `-embed-concurrency N` — drive N concurrent embedders (`Embed`/`EmbedBatch` are
+  goroutine-safe).
 
 ```bash
-./bench/fleet.sh run 9900x nomic-embed-text-v1.5.Q8_0.gguf -embed-concurrency 12
+./bench/fleet.sh run 9900x nomic-embed-text-v1.5.Q8_0.gguf -embed-batch 64
+./bench/fleet.sh run 9900x nomic-embed-text-v1.5.Q8_0.gguf -embed-batch 32 -embed-concurrency 4
 ```
 
 `bench` parses the prefill/decode `t/s` lines; `profile` fetches the `.prof`

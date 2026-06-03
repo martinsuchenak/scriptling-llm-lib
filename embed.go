@@ -58,6 +58,53 @@ func Embed(opts EmbedOptions) ([]float32, error) {
 	return m.embedTokens(ids, pooling, opts.Normalize), nil
 }
 
+// EmbedBatchOptions configures a batched embedding request. Model and Texts are
+// required; Pooling/Normalize apply to every text.
+type EmbedBatchOptions struct {
+	Model string   // path to the .gguf model (required)
+	Texts []string // texts to embed (required)
+
+	Pooling   string // PoolingMean (default) | PoolingLast
+	Normalize bool   // L2-normalize each result (recommended for cosine similarity)
+}
+
+// EmbedBatch embeds many texts at once and returns one vector per text, in input
+// order. For encoder models (bert / nomic-bert) the whole batch is encoded in a
+// single forward pass, so each weight matrix is read once for the batch instead
+// of once per text — dramatically higher throughput than calling Embed in a loop,
+// especially for larger models. For decoder models it falls back to embedding
+// each text individually. Like Embed, it is safe to call from multiple goroutines.
+//
+// Batches are encoded as one packed activation, so memory scales with the total
+// token count × the FFN width; for very large inputs, split into batches of a few
+// hundred texts.
+func EmbedBatch(opts EmbedBatchOptions) ([][]float32, error) {
+	if len(opts.Texts) == 0 {
+		return nil, nil
+	}
+	arch, err := ggufArch(opts.Model)
+	if err != nil {
+		return nil, err
+	}
+	if IsEmbeddingArch(arch) {
+		b, err := getOrLoadBert(opts.Model)
+		if err != nil {
+			return nil, err
+		}
+		return b.embedBatch(opts.Texts, opts.Pooling, opts.Normalize), nil
+	}
+	// Decoder embedders have no batched encoder path — embed each text on its own.
+	out := make([][]float32, len(opts.Texts))
+	for i, t := range opts.Texts {
+		v, err := Embed(EmbedOptions{Model: opts.Model, Text: t, Pooling: opts.Pooling, Normalize: opts.Normalize})
+		if err != nil {
+			return nil, err
+		}
+		out[i] = v
+	}
+	return out, nil
+}
+
 // ModelArch returns a model's GGUF general.architecture (e.g. "llama", "qwen2",
 // "bert", "nomic-bert"), cached. Useful for telling generation models apart from
 // encoder embedding models.

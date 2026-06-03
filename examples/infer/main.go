@@ -26,6 +26,7 @@ func main() {
 	profPath := flag.String("prof", "", "Write a CPU profile to this path (for performance analysis)")
 	embed := flag.Bool("embed", false, "Embedding mode: embed -prompt and report throughput (auto-enabled for encoder models)")
 	embedConcurrency := flag.Int("embed-concurrency", 1, "Embedding mode: number of concurrent embedders (aggregate emb/s across cores)")
+	embedBatch := flag.Int("embed-batch", 1, "Embedding mode: texts per EmbedBatch call (one packed forward pass)")
 
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage: %s -model <path> -prompt <text> [options]\n\n", os.Args[0])
@@ -70,7 +71,7 @@ func main() {
 	// throughput instead. Auto-detected from the model architecture.
 	arch, _ := scriptlingllmlib.ModelArch(*model)
 	if *embed || scriptlingllmlib.IsEmbeddingArch(arch) {
-		runEmbedBench(*model, *prompt, *embedConcurrency)
+		runEmbedBench(*model, *prompt, *embedConcurrency, *embedBatch)
 		return
 	}
 
@@ -106,14 +107,18 @@ func main() {
 }
 
 // runEmbedBench embeds the prompt repeatedly and reports throughput. With
-// concurrency > 1 it drives that many goroutines (Embed is goroutine-safe and
-// runs on a private clone), reporting aggregate emb/s across cores — the figure
+// concurrency > 1 it drives that many goroutines (Embed is goroutine-safe), and
+// with batch > 1 each call embeds that many texts in one packed forward pass
+// (EmbedBatch) — together they report aggregate emb/s across cores, the figure
 // that matters for batch workloads. Stats are tagged with "prefill"/"decode" so
 // the bench harness picks them up; an encoder has no decode loop, so they carry
 // per-embed latency (ms) and throughput (emb/s).
-func runEmbedBench(model, text string, concurrency int) {
+func runEmbedBench(model, text string, concurrency, batch int) {
 	if concurrency < 1 {
 		concurrency = 1
+	}
+	if batch < 1 {
+		batch = 1
 	}
 	v, err := scriptlingllmlib.Embed(scriptlingllmlib.EmbedOptions{Model: model, Text: text, Normalize: true})
 	if err != nil {
@@ -121,6 +126,10 @@ func runEmbedBench(model, text string, concurrency int) {
 		os.Exit(1)
 	}
 	dim := len(v)
+	texts := make([]string, batch)
+	for i := range texts {
+		texts[i] = text
+	}
 
 	var runs int64
 	var wg sync.WaitGroup
@@ -131,8 +140,12 @@ func runEmbedBench(model, text string, concurrency int) {
 		go func() {
 			defer wg.Done()
 			for atomic.LoadInt32(&stop) == 0 {
-				_, _ = scriptlingllmlib.Embed(scriptlingllmlib.EmbedOptions{Model: model, Text: text, Normalize: true})
-				atomic.AddInt64(&runs, 1)
+				if batch > 1 {
+					_, _ = scriptlingllmlib.EmbedBatch(scriptlingllmlib.EmbedBatchOptions{Model: model, Texts: texts, Normalize: true})
+				} else {
+					_, _ = scriptlingllmlib.Embed(scriptlingllmlib.EmbedOptions{Model: model, Text: text, Normalize: true})
+				}
+				atomic.AddInt64(&runs, int64(batch))
 			}
 		}()
 	}
