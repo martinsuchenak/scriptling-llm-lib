@@ -882,6 +882,16 @@ func (g *GGUFModel) loadWeightF32Direct(name string) (interface{}, error) {
 			raw := convertQ5KToTwoQ41(fileData, offset, rows, cols)
 			return &QuantWeight{QType: "q5k1", Raw: raw, Groups: cols / 32, Rows: rows, Cols: cols}, nil
 		}
+		// Q6_K is symmetric (no min), like Q8_0 — and Q8's 8 bits capture the
+		// 6-bit values near-losslessly. Requantize to Q8_0 to run on the fast
+		// q8q8 kernel. Q6_K is ~20% of Q4_K_M / Q5_K_M (ffn_down, output), so this
+		// matters for those models too, not just pure Q6_K.
+		if ti.Type == 14 && cols%32 == 0 && useInt8Q8 {
+			flat := g.dequantize1D(fileData, ti, nElements)
+			if qw := quantizeQ8Rows(reshape2D(flat, rows, cols)); qw != nil {
+				return qw, nil
+			}
+		}
 		if kquantPacked && cols%256 == 0 {
 			// Q5_K/Q6_K have no fast kernel yet — scalar packed path (memory only).
 			qt, blockBytes := "q5k", q5kBlockBytes

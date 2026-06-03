@@ -69,8 +69,8 @@ var pplGolden = []struct {
 	{"models/SmolLM2-135M-Instruct-Q4_0.gguf", 16.782},
 	// K-quant models (mixed quant). These exercise the Q4_K/Q5_K/Q6_K (and the
 	// Q5_0/Q5_1 fallback) dequantizers; they skip when the file is absent.
-	{"models/SmolLM2-135M-Instruct-Q4_K_M.gguf", 12.764}, // Q4_K(->Q4_1 fast) + Q6_K + Q5_0 + Q8
-	{"models/SmolLM2-135M-Instruct-Q6_K.gguf", 12.934},   // Q6_K
+	{"models/SmolLM2-135M-Instruct-Q4_K_M.gguf", 12.659}, // Q4_K(->Q4_1 fast) + Q6_K + Q5_0 + Q8
+	{"models/SmolLM2-135M-Instruct-Q6_K.gguf", 13.154},   // Q6_K
 	{"models/SmolLM2-135M-Instruct-Q5_K_M.gguf", 11.833}, // Q5_K(->2xQ4_1 fast) + Q5_1 + Q6_K
 }
 
