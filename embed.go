@@ -3,6 +3,7 @@ package scriptlingllmlib
 import (
 	"fmt"
 	"math"
+	"sync"
 )
 
 // Pooling strategies for Embed: how per-token hidden states are reduced to one
@@ -26,6 +27,21 @@ type EmbedOptions struct {
 // cache as Generate and runs on a private clone, so it is safe to call from
 // multiple goroutines. The returned vector has length DModel.
 func Embed(opts EmbedOptions) ([]float32, error) {
+	// BERT-style encoder embedding models (all-MiniLM, BGE, E5, GTE, …) use a
+	// separate bidirectional path; decoder LLMs (Llama/Qwen, incl. decoder
+	// embedders like e5-mistral) use the hidden-state pooling below.
+	arch, err := ggufArch(opts.Model)
+	if err != nil {
+		return nil, err
+	}
+	if arch == "bert" || arch == "nomic-bert" {
+		b, err := getOrLoadBert(opts.Model)
+		if err != nil {
+			return nil, err
+		}
+		return b.embed(opts.Text, opts.Pooling, opts.Normalize), nil
+	}
+
 	shared, err := globalModelCacheF32.getOrLoad(opts.Model)
 	if err != nil {
 		return nil, err
@@ -40,6 +56,24 @@ func Embed(opts EmbedOptions) ([]float32, error) {
 		pooling = PoolingMean
 	}
 	return m.embedTokens(ids, pooling, opts.Normalize), nil
+}
+
+// archCache memoizes a model's general.architecture so Embed can route without
+// re-parsing the GGUF on every call.
+var archCache sync.Map // path -> string
+
+func ggufArch(path string) (string, error) {
+	if v, ok := archCache.Load(path); ok {
+		return v.(string), nil
+	}
+	g, err := LoadGGUF(path)
+	if err != nil {
+		return "", err
+	}
+	arch := metaString(g.Metadata, "general.architecture", "llama")
+	g.ReleaseFileData()
+	archCache.Store(path, arch)
+	return arch, nil
 }
 
 // embedTokens runs the transformer over tokenIDs and pools the final-normed
