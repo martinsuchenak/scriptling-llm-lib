@@ -156,6 +156,9 @@ func TestQ5KToTwoQ41Parity(t *testing.T) {
 // TestKQuantPackedEndToEnd exercises the full packed path (build + dispatch) and
 // confirms perplexity matches the dense-float path within float-rounding noise.
 func TestKQuantPackedEndToEnd(t *testing.T) {
+	if raceEnabled {
+		t.Skip("skipping perplexity end-to-end under race detector")
+	}
 	const model = "models/SmolLM2-135M-Instruct-Q4_K_M.gguf"
 	if _, err := os.Stat(model); err != nil {
 		t.Skip("model not present")

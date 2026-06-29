@@ -33,6 +33,9 @@ func TestIQ4NLDequant(t *testing.T) {
 // Q3_K_L repacks are mostly IQ4_NL for their non-256-divisible rows) load and
 // produce finite perplexity instead of failing with "unsupported type 20".
 func TestIQ4NLModelsRun(t *testing.T) {
+	if raceEnabled {
+		t.Skip("skipping perplexity under race detector")
+	}
 	for _, p := range []string{
 		"models/SmolLM2-135M-Instruct-Q2_K.gguf",
 		"models/SmolLM2-135M-Instruct-Q3_K_L.gguf",

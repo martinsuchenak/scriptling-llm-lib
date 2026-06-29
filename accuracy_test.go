@@ -80,6 +80,13 @@ const pplTol = 0.10
 // drift: each model's perplexity over a fixed passage must stay within the golden
 // band, and finite.
 func TestPerplexityRegression(t *testing.T) {
+	// Perplexity runs a full forward pass per token across all 5 models; under
+	// -race that is pathologically slow (>100s per model) without adding any
+	// race-detection signal (the kernels are single-threaded). Coverage of this
+	// regression comes from `task test:full` and the smoke suite.
+	if raceEnabled {
+		t.Skip("skipping perplexity regression under race detector")
+	}
 	for _, g := range pplGolden {
 		// In -short mode keep only the two base-quant models; the k-quant models
 		// (each a separate multi-second load) run in the full suite.
@@ -105,6 +112,9 @@ func TestPerplexityRegression(t *testing.T) {
 // must predict the passage at least as well as the Q4 model (higher-precision
 // weights -> not-higher perplexity). A broken dequant for either type breaks it.
 func TestQuantPrecisionOrdering(t *testing.T) {
+	if raceEnabled {
+		t.Skip("skipping perplexity under race detector")
+	}
 	q8 := loadModelForTest(t, "models/SmolLM2-135M-Instruct-Q8_0.gguf")
 	q4 := loadModelForTest(t, "models/SmolLM2-135M-Instruct-Q4_0.gguf")
 	ids := q8.Tokenizer.Encode(pplText)
