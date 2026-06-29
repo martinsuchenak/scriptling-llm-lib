@@ -20,14 +20,24 @@ tasks:
         msg: "golangci-lint not installed. See https://golangci-lint.run/usage/install/"
 
   test:
-    desc: Run tests
+    desc: "Run tests (fast: no -race, -short skips heavy model loads)"
+    cmds:
+      - go test -count=1 -short ./...
+
+  test:full:
+    desc: Run all tests without the race detector (~12s)
+    cmds:
+      - go test -count=1 ./...
+
+  test:race:
+    desc: Run all tests with the race detector (slow)
     cmds:
       - go test -race -count=1 ./...
 
   test:verbose:
-    desc: Run tests with verbose output
+    desc: "Run tests with verbose output (fast tier: no -race, -short)"
     cmds:
-      - go test -v -race -count=1 ./...
+      - go test -v -count=1 -short ./...
 
   test:coverage:
     desc: Run tests with coverage report

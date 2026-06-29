@@ -3,8 +3,8 @@ package scriptlingllmlib
 import (
 	"context"
 	"os"
+	"sync"
 	"testing"
-	"time"
 )
 
 // TestGenerateCancelledUpfront: a context already cancelled before the call
@@ -32,17 +32,26 @@ func TestGenerateCancelledUpfront(t *testing.T) {
 
 // TestGenerateCancelMidway: cancelling during decode stops early and returns the
 // partial text with ctx.Err(), generating fewer tokens than requested.
+//
+// Cancellation is triggered from the streaming callback on the first emitted
+// token, which guarantees the model is mid-decode when the cancel fires. A
+// fixed sleep would race generation that may finish (e.g. emit EOS) before the
+// timer, producing a spurious nil error.
 func TestGenerateCancelMidway(t *testing.T) {
 	if _, err := os.Stat(concTestModel); err != nil {
 		t.Skip("model not present")
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	go func() { time.Sleep(300 * time.Millisecond); cancel() }()
+	defer cancel()
+
+	var once sync.Once
+	onToken := func(string) { once.Do(cancel) }
 
 	const want = 4096
-	_, nGen, _, _, _, err := GenerateWithCacheContext(
+	_, nGen, _, _, _, err := GenerateWithCacheStream(
 		ctx, concTestModel, "Count slowly and describe each number in detail", want,
-		"greedy", 0.8, 50, 0.9, 1.1, 64, "", "", "")
+		"greedy", 0.8, 50, 0.9, 1.1, 64, "", "", "", onToken,
+	)
 	if err != context.Canceled {
 		t.Fatalf("err = %v, want context.Canceled", err)
 	}
