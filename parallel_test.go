@@ -1,9 +1,16 @@
 package scriptlingllmlib
 
 import (
+	"os"
 	"sync/atomic"
 	"testing"
 )
+
+func TestMain(m *testing.M) {
+	code := m.Run()
+	shutdownWorkers()
+	os.Exit(code)
+}
 
 func TestParallelFor(t *testing.T) {
 	n := 100

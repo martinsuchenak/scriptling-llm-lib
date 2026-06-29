@@ -1,6 +1,6 @@
 // Package scriptlingllmlib provides LLM inference primitives as a Scriptling library.
 //
-// This library exposes 51 native functions under the "llm" namespace, covering
+// This library exposes 52 native functions under the "llm" namespace, covering
 // the core operations needed to implement transformer model inference in Scriptling
 // scripts. All functions are implemented using the Scriptling Native API for
 // zero-reflection overhead on every call.
@@ -49,7 +49,7 @@ const LibraryName = "llm"
 // functions. Register it with a Scriptling interpreter via
 // [scriptling.Scriptling.RegisterLibrary].
 //
-// The library exposes 51 functions and one constant (VERSION).
+// The library exposes 52 functions and one constant (VERSION).
 var Library = object.NewLibrary(LibraryName,
 	map[string]*object.Builtin{
 		"argmax": {

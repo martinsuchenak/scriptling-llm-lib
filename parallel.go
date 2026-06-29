@@ -168,6 +168,7 @@ type workerPool struct {
 	nextChunk int64                // atomic cursor into chunks
 	remaining int64                // atomic chunks not yet completed
 	gen       uint64               // atomic batch generation
+	shutdown  uint64               // set to 1 to tell workers to exit
 	mu        sync.Mutex
 	cond      *sync.Cond
 }
@@ -191,9 +192,22 @@ func initWorkers() {
 	}
 }
 
+func shutdownWorkers() {
+	if atomic.LoadUint64(&wpool.shutdown) == 1 {
+		return
+	}
+	atomic.StoreUint64(&wpool.shutdown, 1)
+	wpool.mu.Lock()
+	wpool.cond.Broadcast()
+	wpool.mu.Unlock()
+}
+
 func workerLoop() {
 	lastGen := atomic.LoadUint64(&wpool.gen)
 	for {
+		if atomic.LoadUint64(&wpool.shutdown) == 1 {
+			return
+		}
 		if atomic.LoadUint64(&wpool.gen) == lastGen {
 			// Spin for the next batch, parking only after parkAfter of idleness.
 			// The inner loop checks the generation cheaply; the time check (and
@@ -202,8 +216,11 @@ func workerLoop() {
 			parked := false
 		spin:
 			for atomic.LoadUint64(&wpool.gen) == lastGen {
+				if atomic.LoadUint64(&wpool.shutdown) == 1 {
+					return
+				}
 				for i := 0; i < 2048; i++ {
-					if atomic.LoadUint64(&wpool.gen) != lastGen {
+					if atomic.LoadUint64(&wpool.gen) != lastGen || atomic.LoadUint64(&wpool.shutdown) == 1 {
 						break spin
 					}
 				}
@@ -214,10 +231,13 @@ func workerLoop() {
 			}
 			if parked {
 				wpool.mu.Lock()
-				for atomic.LoadUint64(&wpool.gen) == lastGen {
+				for atomic.LoadUint64(&wpool.gen) == lastGen && atomic.LoadUint64(&wpool.shutdown) == 0 {
 					wpool.cond.Wait()
 				}
 				wpool.mu.Unlock()
+				if atomic.LoadUint64(&wpool.shutdown) == 1 {
+					return
+				}
 			}
 		}
 		lastGen = atomic.LoadUint64(&wpool.gen)

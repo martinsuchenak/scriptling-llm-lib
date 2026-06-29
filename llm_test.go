@@ -13,8 +13,8 @@ func TestLibraryRegistration(t *testing.T) {
 
 	funcs := Library.Functions()
 	funcCount := len(funcs)
-	if funcCount != 51 {
-		t.Errorf("Library has %d functions, want 51", funcCount)
+	if funcCount != 52 {
+		t.Errorf("Library has %d functions, want 52", funcCount)
 	}
 
 	required := []string{
@@ -31,6 +31,7 @@ func TestLibraryRegistration(t *testing.T) {
 		"quantize_q8", "quantize_q8_rows",
 		"output_logits", "fused_qkv", "fused_ffn", "fused_block",
 		"fused_rope_batch", "fused_attention", "generate", "embed",
+		"clear_session", "embed_batch",
 	}
 	for _, name := range required {
 		if _, ok := funcs[name]; !ok {

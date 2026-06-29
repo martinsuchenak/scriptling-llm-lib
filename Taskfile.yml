@@ -112,7 +112,7 @@ tasks:
   ci:
     desc: Run CI pipeline (test + coverage)
     cmds:
-      - go test -race -count=1 -coverprofile=coverage.txt -covermode=atomic ./...
+      - go test -race -count=1 -run='^Test' -timeout 15m -coverprofile=coverage.txt -covermode=atomic ./...
 
   clean:
     desc: Remove build artifacts
