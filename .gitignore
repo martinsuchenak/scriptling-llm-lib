@@ -30,6 +30,10 @@ go.work.sum
 .DS_Store
 Thumbs.db
 
+# Skopos
+.skopos/
+.skopos-session
+
 # Dependency directories
 /vendor/
 /models/
