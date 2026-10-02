@@ -3,7 +3,7 @@ module github.com/martinsuchenak/scriptling-llm-lib
 go 1.27.1
 
 require (
-	github.com/paularlott/scriptling v0.25.2
+	github.com/paularlott/scriptling v0.27.3
 	golang.org/x/sys v0.48.0
 )
 
